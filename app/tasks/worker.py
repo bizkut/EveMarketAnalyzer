@@ -5,7 +5,11 @@ celery_app = Celery(
     "tasks",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
-    include=["app.tasks.data_fetching"]
+    include=[
+        "app.tasks.data_fetching",
+        "app.tasks.analysis",
+        "app.tasks.scheduler"
+    ]
 )
 
 celery_app.conf.update(
