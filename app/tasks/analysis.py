@@ -15,7 +15,7 @@ def get_db() -> Session:
 def predict_price(dates, prices):
     """Predicts the next price point using linear regression."""
     if len(dates) < 2:
-        return prices[-1] if prices else 0
+        return prices.iloc[-1] if not prices.empty else 0
 
     X = pd.to_numeric(dates).values.reshape(-1, 1)
     y = prices.values
@@ -33,28 +33,41 @@ def analyze_market_data(previous_result=None):
     try:
         thirty_days_ago = datetime.utcnow() - timedelta(days=30)
 
-        # Fetch all necessary data in one go
-        all_history = db.query(MarketHistory).filter(MarketHistory.date >= thirty_days_ago).all()
-        all_item_types = {item.id: item for item in db.query(ItemType).all()}
-        all_regions = {region.id: region for region in db.query(Region).all()}
+        # Get unique combinations of (type_id, region_id) from recent history
+        # This is much more memory-efficient than loading all history at once.
+        item_region_pairs = db.query(
+            MarketHistory.type_id,
+            MarketHistory.region_id
+        ).filter(
+            MarketHistory.date >= thirty_days_ago
+        ).distinct().all()
 
-        if not all_history:
-            logger.warning("No market history data found to analyze.")
+        if not item_region_pairs:
+            logger.warning("No recent market history found to analyze.")
             return
 
-        df = pd.DataFrame([h.__dict__ for h in all_history])
-        df['date'] = pd.to_datetime(df['date'])
+        logger.info(f"Found {len(item_region_pairs)} item-region pairs to analyze.")
 
-        # Group by item and region for analysis
-        grouped = df.groupby(['type_id', 'region_id'])
+        # Fetch all item types into a map for quick lookups
+        all_item_types = {item.id: item for item in db.query(ItemType).all()}
 
         analyzed_results = []
-        for (type_id, region_id), group in grouped:
-            if group.empty:
+        for i, (type_id, region_id) in enumerate(item_region_pairs):
+            if (i + 1) % 100 == 0:
+                logger.info(f"Analyzing pair {i + 1}/{len(item_region_pairs)}...")
+
+            # Fetch history for this specific pair
+            history_records = db.query(MarketHistory).filter(
+                MarketHistory.type_id == type_id,
+                MarketHistory.region_id == region_id,
+                MarketHistory.date >= thirty_days_ago
+            ).order_by(MarketHistory.date).all()
+
+            if not history_records:
                 continue
 
-            # Sort by date to ensure correct calculations
-            group = group.sort_values('date').reset_index()
+            group = pd.DataFrame([h.__dict__ for h in history_records])
+            group['date'] = pd.to_datetime(group['date'])
 
             # Basic stats from the most recent day
             latest_record = group.iloc[-1]
@@ -108,15 +121,16 @@ def analyze_market_data(previous_result=None):
             return
 
         # Bulk insert/update
-        db.query(AnalyzedItem).delete() # Clear old analysis
+        logger.info("Clearing old analyzed data...")
+        db.query(AnalyzedItem).delete()
         db.commit()
 
-        # Convert to list of model objects and bulk insert
+        logger.info(f"Saving {len(analyzed_results)} new analysis records...")
         analyzed_objects = [AnalyzedItem(**data) for data in analyzed_results]
         db.bulk_save_objects(analyzed_objects)
         db.commit()
 
-        logger.info(f"Market data analysis completed. Saved {len(analyzed_results)} records.")
+        logger.info("Market data analysis completed successfully.")
 
     except Exception as e:
         logger.error(f"An error occurred during market data analysis: {e}", exc_info=True)

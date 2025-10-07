@@ -46,12 +46,12 @@ services:
     depends_on:
       - redis
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TOKEN}
-    depends_on:
-      - backend
-    restart: "unless-stopped"
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TOKEN}
+  #   depends_on:
+  #     - backend
+  #   restart: "unless-stopped"
 
 volumes:
   postgres_data:
