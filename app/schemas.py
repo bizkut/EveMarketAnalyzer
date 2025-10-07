@@ -8,7 +8,7 @@ class RegionBase(BaseModel):
     name: str
 
 class RegionCreate(RegionBase):
-    pass
+    description: Optional[str] = None
 
 class Region(RegionBase):
     description: Optional[str] = None

@@ -18,8 +18,18 @@ def fetch_and_store_regions(previous_result=None):
     db = SessionLocal()
     try:
         for region_id in regions_data:
-            if not db.query(Region).filter(Region.id == region_id).first():
-                details = loop.run_until_complete(esi_service.get_region_details(region_id))
+            details = loop.run_until_complete(esi_service.get_region_details(region_id))
+            db_region = db.query(Region).filter(Region.id == region_id).first()
+
+            if db_region:
+                # Update existing region if name or description has changed
+                if db_region.name != details['name'] or db_region.description != details.get('description'):
+                    logger.info(f"Updating region {details['name']}.")
+                    db_region.name = details['name']
+                    db_region.description = details.get('description')
+            else:
+                # Add new region
+                logger.info(f"Adding new region: {details['name']}")
                 region = RegionCreate(id=region_id, name=details['name'], description=details.get('description'))
                 db.add(Region(**region.dict()))
         db.commit()
