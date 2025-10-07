@@ -4,7 +4,7 @@ from app.tasks.worker import celery_app
 from app.tasks.data_fetching import fetch_and_store_regions, fetch_and_store_item_types, fetch_and_store_market_history
 from app.tasks.analysis import analyze_market_data
 from app.database import SessionLocal
-from app.models import Region, AnalyzedItem
+from app.models import Region, ItemType, AnalyzedItem
 import logging
 
 logger = logging.getLogger(__name__)
@@ -32,19 +32,22 @@ def run_daily_tasks():
 
 async def init_scheduler():
     """
-    Initializes data fetching on startup if there is no analyzed data.
-    This is a more reliable check than looking for regions, as it ensures
-    that the entire data pipeline has completed at least once.
+    Initializes data fetching on startup if the database is empty.
+    Checks for regions, item types, and analyzed data to determine if
+    the initial data fetch should run.
     """
     logger.info("Checking if initial data fetch is needed...")
     db = SessionLocal()
     try:
-        # Check if there is any data in the analyzed_items table
-        if db.query(AnalyzedItem).first() is None:
-            logger.info("No analyzed data found. Starting initial data fetch.")
-            # Run the tasks sequentially
+        # Check if any of the essential tables are empty
+        no_regions = db.query(Region).first() is None
+        no_item_types = db.query(ItemType).first() is None
+        no_analyzed_data = db.query(AnalyzedItem).first() is None
+
+        if no_regions and no_item_types and no_analyzed_data:
+            logger.info("No data found in the database. Starting initial data fetch.")
             run_daily_tasks.delay()
         else:
-            logger.info("Analyzed data already exists. Skipping initial fetch.")
+            logger.info("Data already exists. Skipping initial fetch.")
     finally:
         db.close()
