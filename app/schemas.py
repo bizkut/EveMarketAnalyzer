@@ -68,6 +68,10 @@ class AnalyzedItemBase(BaseModel):
     volatility_30d: float
     trend_direction: int
     last_updated: datetime.datetime
+    price_stability: float
+    order_count_rank: int
+    volume_rank: int
+    profit_margin_rank: int
 
 class AnalyzedItemCreate(AnalyzedItemBase):
     pass

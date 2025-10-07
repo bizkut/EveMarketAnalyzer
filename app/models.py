@@ -46,3 +46,7 @@ class AnalyzedItem(Base):
     volatility_30d = Column(Float)
     trend_direction = Column(Integer) # 1 for up, -1 for down, 0 for stable
     last_updated = Column(DateTime, default=datetime.datetime.utcnow)
+    price_stability = Column(Float)
+    order_count_rank = Column(Integer)
+    volume_rank = Column(Integer)
+    profit_margin_rank = Column(Integer)
