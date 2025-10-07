@@ -3,6 +3,7 @@ version: '3.8'
 services:
   backend:
     build: .
+    command: ["./startup.sh"]
     ports:
       - "8000:8000"
     volumes:
@@ -12,6 +13,7 @@ services:
     depends_on:
       - db
       - redis
+      - celery_worker
 
   db:
     image: postgres:13
