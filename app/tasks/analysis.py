@@ -27,7 +27,7 @@ def predict_price(dates, prices):
     return model.predict([[next_date]])[0]
 
 @celery_app.task
-def analyze_market_data():
+def analyze_market_data(previous_result=None):
     logger.info("Starting market data analysis...")
     db = get_db()
     try:

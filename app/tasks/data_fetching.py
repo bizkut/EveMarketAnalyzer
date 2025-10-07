@@ -10,7 +10,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 @celery_app.task
-def fetch_and_store_regions():
+def fetch_and_store_regions(previous_result=None):
     logger.info("Fetching and storing regions...")
     loop = asyncio.get_event_loop()
     regions_data = loop.run_until_complete(esi_service.get_regions())
@@ -28,7 +28,7 @@ def fetch_and_store_regions():
         db.close()
 
 @celery_app.task
-def fetch_and_store_item_types():
+def fetch_and_store_item_types(previous_result=None):
     logger.info("Fetching and storing item types...")
     loop = asyncio.get_event_loop()
     db = SessionLocal()
@@ -52,7 +52,7 @@ def fetch_and_store_item_types():
         db.close()
 
 @celery_app.task
-def fetch_and_store_market_history():
+def fetch_and_store_market_history(previous_result=None):
     logger.info("Fetching and storing market history...")
     loop = asyncio.get_event_loop()
     db = SessionLocal()

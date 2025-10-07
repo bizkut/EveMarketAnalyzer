@@ -14,7 +14,7 @@ class Region(RegionBase):
     description: Optional[str] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 # ItemType Schemas
 class ItemTypeBase(BaseModel):
@@ -30,7 +30,7 @@ class ItemType(ItemTypeBase):
     icon_url: Optional[str] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 # MarketHistory Schemas
 class MarketHistoryBase(BaseModel):
@@ -51,7 +51,7 @@ class MarketHistory(MarketHistoryBase):
     region_id: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 # AnalyzedItem Schemas
 class AnalyzedItemBase(BaseModel):
@@ -76,7 +76,7 @@ class AnalyzedItem(AnalyzedItemBase):
     id: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 # API Response Schemas
 class TopItemResponse(BaseModel):
