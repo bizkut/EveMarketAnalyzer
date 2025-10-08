@@ -26,7 +26,7 @@ services:
 
   celery_worker:
     build: .
-    command: celery -A app.tasks.worker worker --loglevel=info
+    command: celery -A app.tasks.worker worker
     volumes:
       - .:/app
     env_file:
@@ -37,7 +37,7 @@ services:
 
   celery_beat:
     build: .
-    command: celery -A app.tasks.worker beat --loglevel=info
+    command: celery -A app.tasks.worker beat
     volumes:
       - .:/app
     env_file:
