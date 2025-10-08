@@ -1,4 +1,8 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from dotenv import load_dotenv
+
+# Explicitly load variables from .env file into the environment
+load_dotenv()
 
 class Settings(BaseSettings):
     POSTGRES_SERVER: str
@@ -15,6 +19,8 @@ class Settings(BaseSettings):
     ESI_BASE_URL: str
     USER_AGENT: str
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding='utf-8', extra='ignore')
+    # Pydantic will now read the variables from the environment,
+    # which have been loaded by the load_dotenv() call above.
+    model_config = SettingsConfigDict(extra='ignore')
 
 settings = Settings()
