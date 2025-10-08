@@ -8,7 +8,7 @@ from app.services.api_client import esi_client, everef_client
 from datetime import datetime
 
 async def update_regions():
-    db: Session = next(SessionLocal())
+    db: Session = SessionLocal()
     try:
         region_ids = await esi_client.get_regions()
         tasks = [esi_client.get_region_info(region_id) for region_id in region_ids]
@@ -25,7 +25,7 @@ async def update_regions():
         db.close()
 
 async def update_item_types_for_region(region_id: int):
-    db: Session = next(SessionLocal())
+    db: Session = SessionLocal()
     try:
         type_ids = await esi_client.get_type_ids_in_region(region_id)
 
@@ -47,7 +47,7 @@ async def update_item_types_for_region(region_id: int):
         db.close()
 
 async def update_all_item_types():
-    db: Session = next(SessionLocal())
+    db: Session = SessionLocal()
     try:
         region_ids = [row[0] for row in db.query(Region.region_id).all()]
         await asyncio.gather(*(update_item_types_for_region(rid) for rid in region_ids))
@@ -56,7 +56,7 @@ async def update_all_item_types():
 
 
 async def update_market_history():
-    db: Session = next(SessionLocal())
+    db: Session = SessionLocal()
     try:
         urls = await everef_client.get_market_history_urls()
 
