@@ -109,30 +109,71 @@ def fetch_and_store_market_history(previous_result=None):
     loop = asyncio.get_event_loop()
     db = SessionLocal()
     try:
-        item_types = db.query(ItemType).all()
         regions = db.query(Region).all()
+        logger.info(f"Processing market history for {len(regions)} regions.")
+
         for region in regions:
-            for item_type in item_types:
-                history_data = loop.run_until_complete(esi_service.get_market_history(item_type.id, region.id))
-                for record in history_data:
-                    record_date = datetime.strptime(record['date'], '%Y-%m-%d')
-                    if not db.query(MarketHistory).filter(
-                        MarketHistory.type_id == item_type.id,
+            logger.info(f"Fetching marketable types for region: {region.name} ({region.id})")
+            marketable_type_ids = loop.run_until_complete(esi_service.get_type_ids_in_region(region.id))
+            logger.info(f"Found {len(marketable_type_ids)} marketable types in {region.name}.")
+
+            batch_size = 100
+            for i in range(0, len(marketable_type_ids), batch_size):
+                batch_ids = marketable_type_ids[i:i+batch_size]
+                logger.info(f"Processing history batch {i//batch_size + 1}/{(len(marketable_type_ids) + batch_size - 1)//batch_size} for region {region.name}...")
+
+                history_tasks = [esi_service.get_market_history(type_id, region.id) for type_id in batch_ids]
+                history_results = loop.run_until_complete(asyncio.gather(*history_tasks, return_exceptions=True))
+
+                # Process the results
+                all_potential_records = []
+                for type_id, history_data in zip(batch_ids, history_results):
+                    if isinstance(history_data, Exception) or not history_data:
+                        continue
+                    for record in history_data:
+                        record_date = datetime.strptime(record['date'], '%Y-%m-%d').date()
+                        all_potential_records.append({
+                            'type_id': type_id,
+                            'date': record_date,
+                            'record': record
+                        })
+
+                if all_potential_records:
+                    # Bulk check for existing records to minimize DB queries
+                    type_ids_to_check = {r['type_id'] for r in all_potential_records}
+                    dates_to_check = {r['date'] for r in all_potential_records}
+
+                    existing_records_query = db.query(MarketHistory.type_id, MarketHistory.date).filter(
+                        MarketHistory.type_id.in_(type_ids_to_check),
                         MarketHistory.region_id == region.id,
-                        MarketHistory.date == record_date
-                    ).first():
-                        history_create = MarketHistoryCreate(
-                            type_id=item_type.id,
-                            region_id=region.id,
-                            date=record_date,
-                            average=record['average'],
-                            highest=record['highest'],
-                            lowest=record['lowest'],
-                            order_count=record['order_count'],
-                            volume=record['volume']
-                        )
-                        db.add(MarketHistory(**history_create.dict()))
-        db.commit()
-        logger.info("Market history fetched and stored successfully.")
+                        MarketHistory.date.in_(dates_to_check)
+                    )
+                    existing_records = set(existing_records_query.all())
+
+                    records_to_add = []
+                    for item in all_potential_records:
+                        if (item['type_id'], item['date']) not in existing_records:
+                            record = item['record']
+                            history_create = MarketHistoryCreate(
+                                type_id=item['type_id'],
+                                region_id=region.id,
+                                date=item['date'],
+                                average=record['average'],
+                                highest=record['highest'],
+                                lowest=record['lowest'],
+                                order_count=record['order_count'],
+                                volume=record['volume']
+                            )
+                            records_to_add.append(MarketHistory(**history_create.dict()))
+
+                    if records_to_add:
+                        db.bulk_save_objects(records_to_add)
+                        db.commit()
+                        logger.info(f"Added {len(records_to_add)} new market history records for region {region.name}.")
+
+        logger.info("Market history fetching task completed.")
+    except Exception as e:
+        logger.error(f"An error occurred during market history fetching: {e}", exc_info=True)
+        db.rollback()
     finally:
         db.close()
