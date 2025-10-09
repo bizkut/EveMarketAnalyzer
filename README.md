@@ -37,10 +37,11 @@ This project is a FastAPI application that provides an API for analyzing EVE Onl
 
 3.  **Configure your environment:**
 
-    Open the `.env` file and customize the variables as needed. At a minimum, you should set a secure `API_KEY`.
+    Open the `.env` file and customize the variables as needed. At a minimum, you should set a secure `API_KEY`. The `DATABASE_URL` is configured in `docker-compose.yml` and does not need to be changed here unless you are running outside of Docker.
 
     ```env
-    DATABASE_URL=postgresql://user:password@db:5432/evemarket
+    # This is for reference, but the primary DATABASE_URL is set in docker-compose.yml
+    DATABASE_URL=postgresql://eveuser:password@db:5432/evemarket
     REDIS_URL=redis://redis:6379/0
     API_KEY=your_secret_api_key
     LOG_LEVEL=INFO
