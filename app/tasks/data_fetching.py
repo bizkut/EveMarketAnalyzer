@@ -56,7 +56,7 @@ def fetch_and_store_market_history(self, date_str: str):
         missing_region_ids = all_region_ids - existing_region_ids
         if missing_region_ids:
             logger.info(f"Found {len(missing_region_ids)} new regions to process.")
-            for region_id in missing_region_ids:
+            for region_id in sorted(list(missing_region_ids)):
                 lock_key = f"lock:region:{region_id}"
                 if redis_client.set(lock_key, "1", nx=True, ex=LOCK_TIMEOUT):
                     try:
@@ -85,7 +85,7 @@ def fetch_and_store_market_history(self, date_str: str):
         missing_type_ids = all_type_ids - existing_type_ids
         if missing_type_ids:
             logger.info(f"Found {len(missing_type_ids)} new types to process.")
-            for type_id in missing_type_ids:
+            for type_id in sorted(list(missing_type_ids)):
                 lock_key = f"lock:type:{type_id}"
                 if redis_client.set(lock_key, "1", nx=True, ex=LOCK_TIMEOUT):
                     try:
