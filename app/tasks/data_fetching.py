@@ -9,9 +9,10 @@ import pandas as pd
 from celery import shared_task
 from sqlalchemy.orm import Session
 
+import redis
 from .. import crud, schemas, models
 from ..database import SessionLocal
-from ..redis_client import redis_client
+from ..config import settings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +37,7 @@ def _fetch_esi_url(url: str):
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def fetch_and_store_market_history(self, date_str: str):
     db: Session = SessionLocal()
+    redis_client = redis.from_url(settings.REDIS_URL)
     try:
         url = f"{EVEREF_DATA_URL}/{date_str[:4]}/market-history-{date_str}.csv.bz2"
         logger.info(f"Fetching market history from {url}")
@@ -96,11 +98,20 @@ def fetch_and_store_market_history(self, date_str: str):
                         logger.info(f"Fetching type info for {type_id}")
                         data = _fetch_esi_url(type_url)
                         icon_url = f"https://images.evetech.net/types/{type_id}/icon"
+
+                        dogma_attributes = [
+                            schemas.TypeDogmaAttributeCreate(
+                                attribute_id=attr["attribute_id"], value=attr["value"]
+                            )
+                            for attr in data.get("dogma_attributes", [])
+                        ]
+
                         type_create = schemas.EveTypeCreate(
                             type_id=type_id,
                             name=data.get("name"),
                             description=data.get("description", ""),
                             icon_url=icon_url,
+                            dogma_attributes=dogma_attributes,
                         )
                         crud.get_or_create_type(db, type_create)
                     except Exception as e:

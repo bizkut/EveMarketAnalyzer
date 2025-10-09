@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict
 from datetime import date
-from typing import Optional
+from typing import Optional, List
 
 # Market History Schemas
 class MarketHistoryBase(BaseModel):
@@ -38,6 +38,19 @@ class RegionCreate(RegionBase):
 class Region(RegionBase):
     model_config = ConfigDict(from_attributes=True)
 
+# Dogma Attribute Schemas
+class TypeDogmaAttributeBase(BaseModel):
+    attribute_id: int
+    value: float
+
+class TypeDogmaAttributeCreate(TypeDogmaAttributeBase):
+    pass
+
+class TypeDogmaAttribute(TypeDogmaAttributeBase):
+    id: int
+    type_id: int
+    model_config = ConfigDict(from_attributes=True)
+
 # EveType Schemas
 class EveTypeBase(BaseModel):
     type_id: int
@@ -46,7 +59,8 @@ class EveTypeBase(BaseModel):
     icon_url: Optional[str] = None
 
 class EveTypeCreate(EveTypeBase):
-    pass
+    dogma_attributes: List[TypeDogmaAttributeCreate] = []
 
 class EveType(EveTypeBase):
+    dogma_attributes: List[TypeDogmaAttribute] = []
     model_config = ConfigDict(from_attributes=True)

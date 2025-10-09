@@ -80,7 +80,7 @@ def get_or_create_type(db: Session, eve_type: schemas.EveTypeCreate) -> models.E
     """
     Retrieves an EVE type from the database or creates it if it does not exist.
     Handles race conditions where another process might create the same type
-    concurrently.
+    concurrently. Also handles creation of associated dogma attributes.
     """
     # First, try to fetch the type
     db_type = db.query(models.EveType).filter(models.EveType.type_id == eve_type.type_id).first()
@@ -88,7 +88,14 @@ def get_or_create_type(db: Session, eve_type: schemas.EveTypeCreate) -> models.E
         return db_type
 
     # If it doesn't exist, create it
-    db_type = models.EveType(**eve_type.model_dump())
+    type_data = eve_type.model_dump()
+    dogma_attributes_data = type_data.pop("dogma_attributes", [])
+
+    db_type = models.EveType(**type_data)
+
+    for attr_data in dogma_attributes_data:
+        db_type.dogma_attributes.append(models.TypeDogmaAttribute(**attr_data))
+
     db.add(db_type)
     try:
         db.commit()

@@ -36,3 +36,17 @@ class EveType(Base):
     icon_url = Column(String)
 
     history = relationship("MarketHistory", back_populates="eve_type")
+    dogma_attributes = relationship(
+        "TypeDogmaAttribute", back_populates="eve_type", cascade="all, delete-orphan"
+    )
+
+
+class TypeDogmaAttribute(Base):
+    __tablename__ = "type_dogma_attributes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    type_id = Column(Integer, ForeignKey("eve_types.type_id"))
+    attribute_id = Column(Integer)
+    value = Column(Float)
+
+    eve_type = relationship("EveType", back_populates="dogma_attributes")
