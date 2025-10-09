@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from .. import crud, schemas
 from ..database import SessionLocal
 from ..config import settings
+from .analysis import perform_market_analysis
 
 # Configure logging
 logging.basicConfig(level=settings.LOG_LEVEL.upper())
@@ -178,17 +179,30 @@ def download_and_extract_ids(date_str: str) -> dict:
 
 @shared_task
 def dispatch_market_history_tasks(processing_info: list):
-    """Dispatches the market history processing tasks in a group."""
+    """
+    Dispatches market history processing tasks and chains the market analysis
+    task to run upon their completion.
+    """
     if not processing_info:
         logger.info("No market history tasks to dispatch.")
         return
-    tasks = [
+
+    # Create a group of tasks to process each market history file
+    header = group(
         process_market_history.si(info["file_path"], info["date"])
         for info in processing_info
-    ]
-    market_history_tasks = group(tasks)
-    market_history_tasks.delay()
-    logger.info(f"Dispatched market history processing for {len(processing_info)} files.")
+    )
+
+    # Define the market analysis task as the callback
+    callback = perform_market_analysis.si()
+
+    # Use a chord to execute the analysis after all history tasks are done
+    workflow = chord(header, callback)
+    workflow.delay()
+    logger.info(
+        f"Dispatched market history processing for {len(processing_info)} files, "
+        f"with market analysis chained as a callback."
+    )
 
 
 @shared_task

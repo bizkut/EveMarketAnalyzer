@@ -2,6 +2,7 @@ from pydantic import BaseModel, ConfigDict
 from datetime import date
 from typing import Optional, List
 
+
 # Market History Schemas
 class MarketHistoryBase(BaseModel):
     average: float
@@ -13,8 +14,10 @@ class MarketHistoryBase(BaseModel):
     region_id: int
     type_id: int
 
+
 class MarketHistoryCreate(MarketHistoryBase):
     pass
+
 
 class MarketHistory(BaseModel):
     average: float
@@ -26,30 +29,37 @@ class MarketHistory(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
 # Region Schemas
 class RegionBase(BaseModel):
     region_id: int
     name: str
     description: Optional[str] = None
 
+
 class RegionCreate(RegionBase):
     pass
 
+
 class Region(RegionBase):
     model_config = ConfigDict(from_attributes=True)
+
 
 # Dogma Attribute Schemas
 class TypeDogmaAttributeBase(BaseModel):
     attribute_id: int
     value: float
 
+
 class TypeDogmaAttributeCreate(TypeDogmaAttributeBase):
     pass
+
 
 class TypeDogmaAttribute(TypeDogmaAttributeBase):
     id: int
     type_id: int
     model_config = ConfigDict(from_attributes=True)
+
 
 # EveType Schemas
 class EveTypeBase(BaseModel):
@@ -67,9 +77,34 @@ class EveTypeBase(BaseModel):
     radius: Optional[float] = None
     volume: Optional[float] = None
 
+
 class EveTypeCreate(EveTypeBase):
     dogma_attributes: List[TypeDogmaAttributeCreate] = []
+
 
 class EveType(EveTypeBase):
     dogma_attributes: List[TypeDogmaAttribute] = []
     model_config = ConfigDict(from_attributes=True)
+
+
+# Market Analysis Schemas
+class MarketAnalysisBase(BaseModel):
+    type_id: int
+    region_id: int
+    demand: float
+    profit_margin: float
+
+
+class MarketAnalysisCreate(MarketAnalysisBase):
+    pass
+
+
+class MarketAnalysis(MarketAnalysisBase):
+    type_name: str
+    region_name: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MarketAnalysisResult(BaseModel):
+    results: List[MarketAnalysis]

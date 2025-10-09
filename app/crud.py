@@ -3,6 +3,7 @@ from typing import List, Set, Optional
 
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from . import models, schemas
 
@@ -130,3 +131,81 @@ def get_existing_type_ids(db: Session, type_ids: List[int]) -> Set[int]:
         return set()
     existing = db.query(models.EveType.type_id).filter(models.EveType.type_id.in_(type_ids)).all()
     return {t[0] for t in existing}
+
+
+def create_or_update_market_analysis(
+    db: Session, analysis_records: List[schemas.MarketAnalysisCreate]
+):
+    """
+    Bulk creates or updates market analysis records.
+    Uses ON CONFLICT DO UPDATE for PostgreSQL for efficiency.
+    Falls back to a slower, iterative approach for other databases.
+    """
+    if not analysis_records:
+        return
+
+    if db.bind.dialect.name == "postgresql":
+        stmt = pg_insert(models.MarketAnalysis).values(
+            [record.model_dump() for record in analysis_records]
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["type_id", "region_id"],
+            set_={
+                "demand": stmt.excluded.demand,
+                "profit_margin": stmt.excluded.profit_margin,
+            },
+        )
+        db.execute(stmt)
+    else:
+        # Fallback for non-PostgreSQL databases (like SQLite in tests)
+        for record in analysis_records:
+            existing_record = (
+                db.query(models.MarketAnalysis)
+                .filter_by(type_id=record.type_id, region_id=record.region_id)
+                .first()
+            )
+            if existing_record:
+                existing_record.demand = record.demand
+                existing_record.profit_margin = record.profit_margin
+            else:
+                db.add(models.MarketAnalysis(**record.model_dump()))
+
+    db.commit()
+
+
+def get_market_analysis(
+    db: Session,
+    sort: str,
+    limit: int = 100,
+    type_id: Optional[int] = None,
+    type_name: Optional[str] = None,
+    region_id: Optional[int] = None,
+    region_name: Optional[str] = None,
+) -> List[models.MarketAnalysis]:
+    """
+    Retrieves pre-calculated market analysis data, sorted, limited, and filtered.
+    """
+    query = db.query(models.MarketAnalysis).join(models.EveType).join(models.Region)
+
+    if type_id is not None:
+        query = query.filter(models.MarketAnalysis.type_id == type_id)
+    if type_name is not None:
+        query = query.filter(models.EveType.name.ilike(f"%{type_name}%"))
+    if region_id is not None:
+        query = query.filter(models.MarketAnalysis.region_id == region_id)
+    if region_name is not None:
+        query = query.filter(models.Region.name.ilike(f"%{region_name}%"))
+
+    if sort == "profit_margin":
+        query = query.order_by(models.MarketAnalysis.profit_margin.desc())
+    else:  # sort == "demand"
+        query = query.order_by(models.MarketAnalysis.demand.desc())
+
+    return query.limit(limit).all()
+
+
+def is_analysis_table_empty(db: Session) -> bool:
+    """
+    Checks if the market_analysis table has any records.
+    """
+    return db.query(models.MarketAnalysis).first() is None
