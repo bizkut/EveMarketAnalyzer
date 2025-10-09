@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from .. import crud, schemas, models
 from ..database import SessionLocal
+from ..redis_client import redis_client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -20,6 +21,8 @@ logger = logging.getLogger(__name__)
 ESI_API_BASE_URL = "https://esi.evetech.net/latest"
 # EVEref data URL
 EVEREF_DATA_URL = "https://data.everef.net/market-history"
+# Redis lock timeout (in seconds)
+LOCK_TIMEOUT = 60 * 5  # 5 minutes
 
 
 @backoff.on_exception(backoff.expo, httpx.RequestError, max_tries=5)
@@ -50,44 +53,62 @@ def fetch_and_store_market_history(self, date_str: str):
         existing_region_ids = crud.get_existing_region_ids(db, list(all_region_ids))
         missing_region_ids = all_region_ids - existing_region_ids
         if missing_region_ids:
-            logger.info(f"Found {len(missing_region_ids)} new regions to fetch.")
+            logger.info(f"Found {len(missing_region_ids)} new regions to process.")
             for region_id in missing_region_ids:
-                try:
-                    region_url = f"{ESI_API_BASE_URL}/universe/regions/{region_id}/"
-                    logger.info(f"Fetching region info for {region_id}")
-                    data = _fetch_esi_url(region_url)
-                    region_create = schemas.RegionCreate(
-                        region_id=region_id,
-                        name=data.get("name"),
-                        description=data.get("description", ""),
-                    )
-                    crud.get_or_create_region(db, region_create)
-                except Exception as e:
-                    logger.error(
-                        f"Skipping region {region_id} due to fetch/create error: {e}"
-                    )
+                lock_key = f"lock:region:{region_id}"
+                if redis_client.set(lock_key, "1", nx=True, ex=LOCK_TIMEOUT):
+                    try:
+                        # Double-check if region was created while waiting for the lock
+                        if db.query(models.Region).filter(models.Region.region_id == region_id).first():
+                            logger.info(f"Region {region_id} was created by another worker. Skipping.")
+                            continue
+
+                        region_url = f"{ESI_API_BASE_URL}/universe/regions/{region_id}/"
+                        logger.info(f"Fetching region info for {region_id}")
+                        data = _fetch_esi_url(region_url)
+                        region_create = schemas.RegionCreate(
+                            region_id=region_id,
+                            name=data.get("name"),
+                            description=data.get("description", ""),
+                        )
+                        crud.get_or_create_region(db, region_create)
+                    except Exception as e:
+                        logger.error(f"Skipping region {region_id} due to fetch/create error: {e}")
+                    finally:
+                        redis_client.delete(lock_key)
+                else:
+                    logger.info(f"Region {region_id} is being processed by another worker. Skipping.")
 
         existing_type_ids = crud.get_existing_type_ids(db, list(all_type_ids))
         missing_type_ids = all_type_ids - existing_type_ids
         if missing_type_ids:
-            logger.info(f"Found {len(missing_type_ids)} new types to fetch.")
+            logger.info(f"Found {len(missing_type_ids)} new types to process.")
             for type_id in missing_type_ids:
-                try:
-                    type_url = f"{ESI_API_BASE_URL}/universe/types/{type_id}/"
-                    logger.info(f"Fetching type info for {type_id}")
-                    data = _fetch_esi_url(type_url)
-                    icon_url = f"https://images.evetech.net/types/{type_id}/icon"
-                    type_create = schemas.EveTypeCreate(
-                        type_id=type_id,
-                        name=data.get("name"),
-                        description=data.get("description", ""),
-                        icon_url=icon_url,
-                    )
-                    crud.get_or_create_type(db, type_create)
-                except Exception as e:
-                    logger.error(
-                        f"Skipping type {type_id} due to fetch/create error: {e}"
-                    )
+                lock_key = f"lock:type:{type_id}"
+                if redis_client.set(lock_key, "1", nx=True, ex=LOCK_TIMEOUT):
+                    try:
+                         # Double-check if type was created while waiting for the lock
+                        if db.query(models.EveType).filter(models.EveType.type_id == type_id).first():
+                            logger.info(f"Type {type_id} was created by another worker. Skipping.")
+                            continue
+
+                        type_url = f"{ESI_API_BASE_URL}/universe/types/{type_id}/"
+                        logger.info(f"Fetching type info for {type_id}")
+                        data = _fetch_esi_url(type_url)
+                        icon_url = f"https://images.evetech.net/types/{type_id}/icon"
+                        type_create = schemas.EveTypeCreate(
+                            type_id=type_id,
+                            name=data.get("name"),
+                            description=data.get("description", ""),
+                            icon_url=icon_url,
+                        )
+                        crud.get_or_create_type(db, type_create)
+                    except Exception as e:
+                        logger.error(f"Skipping type {type_id} due to fetch/create error: {e}")
+                    finally:
+                        redis_client.delete(lock_key)
+                else:
+                    logger.info(f"Type {type_id} is being processed by another worker. Skipping.")
 
         # Now that dependencies are met, bulk insert market data
         history_records = [
