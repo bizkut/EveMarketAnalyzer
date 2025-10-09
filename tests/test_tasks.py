@@ -19,6 +19,7 @@ from app.tasks.data_fetching import (
     get_ids_from_date_file,
     aggregate_and_dispatch_dependencies,
     chord,
+    dispatch_market_history_tasks,
 )
 
 
@@ -126,60 +127,73 @@ def test_get_ids_from_date_file_is_json_serializable():
         pytest.fail("The result of get_ids_from_date_file is not JSON serializable")
 
 
-@patch("app.tasks.data_fetching.chain")
+@patch("app.tasks.data_fetching.group")
+def test_dispatch_market_history_tasks(mock_group):
+    dates = ["2023-01-01", "2023-01-02"]
+    dispatch_market_history_tasks(dates)
+
+    mock_group.assert_called_once()
+    # Ensure all tasks in the group have immutable signatures
+    for task_sig in mock_group.call_args[0][0]:
+        assert task_sig.immutable is True
+    mock_group.return_value.delay.assert_called_once()
+
+
+@patch("app.tasks.data_fetching.chord")
 @patch("app.tasks.data_fetching.crud.get_existing_type_ids")
 @patch("app.tasks.data_fetching.crud.get_existing_region_ids")
-def test_aggregate_and_dispatch_dependencies(
-    mock_get_regions, mock_get_types, mock_chain, db_session
+def test_aggregate_and_dispatch_dependencies_with_missing(
+    mock_get_regions, mock_get_types, mock_chord, db_session
 ):
     """
-    Tests that the aggregator task correctly identifies missing dependencies
-    and constructs a chain of groups with immutable signatures.
+    Tests that the aggregator correctly uses a chord when dependencies are missing.
     """
-    # Input to the aggregator task
-    mock_id_results = [
-        {"region_ids": [10000002, 10000003], "type_ids": [34, 35]},
-        {"region_ids": [10000002, 10000004], "type_ids": [34, 36]},
-    ]
-    dates = ["2023-01-01", "2023-01-02"]
+    mock_id_results = [{"region_ids": [1, 2], "type_ids": [10, 11]}]
+    dates = ["2023-01-01"]
+    mock_get_regions.return_value = {1}  # Region 2 is missing
+    mock_get_types.return_value = {10}   # Type 11 is missing
 
-    # Mock DB lookups
-    mock_get_regions.return_value = {10000002}  # 10000003 and 10000004 are missing
-    mock_get_types.return_value = {34}          # 35 and 36 are missing
-
-    # Call the aggregator
     aggregate_and_dispatch_dependencies(mock_id_results, dates)
 
-    # Assertions
-    mock_get_regions.assert_called_once()
-    mock_get_types.assert_called_once()
+    mock_chord.assert_called_once()
+    kwargs = mock_chord.call_args.kwargs
 
-    # Check that chain was called and inspect its arguments
-    mock_chain.assert_called_once()
-    args, _ = mock_chain.call_args
+    # Check the header of the chord
+    header_group = kwargs['header']
+    assert len(header_group.tasks) == 2  # One for region, one for type
+    task_names = {t.task for t in header_group.tasks}
+    assert 'app.tasks.data_fetching.create_region' in task_names
+    assert 'app.tasks.data_fetching.create_type' in task_names
 
-    # The chain should contain 3 groups of tasks
-    assert len(args) == 3
-    region_group, type_group, history_group = args
+    # Check the body of the chord
+    callback_sig = kwargs['body']
+    assert callback_sig.task == 'app.tasks.data_fetching.dispatch_market_history_tasks'
+    assert callback_sig.immutable is True
+    assert callback_sig.kwargs['dates'] == dates
 
-    # Verify the contents and immutability of each group
-    assert len(region_group.tasks) == 2
-    for task_sig in region_group.tasks:
-        assert task_sig.immutable is True
-    assert {s.args[0] for s in region_group.tasks} == {10000003, 10000004}
+    mock_chord.return_value.delay.assert_called_once()
 
-    assert len(type_group.tasks) == 2
-    for task_sig in type_group.tasks:
-        assert task_sig.immutable is True
-    assert {s.args[0] for s in type_group.tasks} == {35, 36}
 
-    assert len(history_group.tasks) == 2
-    for task_sig in history_group.tasks:
-        assert task_sig.immutable is True
-    assert {s.args[0] for s in history_group.tasks} == set(dates)
+@patch("app.tasks.data_fetching.chord")
+@patch("app.tasks.data_fetching.dispatch_market_history_tasks.delay")
+@patch("app.tasks.data_fetching.crud.get_existing_type_ids")
+@patch("app.tasks.data_fetching.crud.get_existing_region_ids")
+def test_aggregate_and_dispatch_dependencies_without_missing(
+    mock_get_regions, mock_get_types, mock_dispatch_delay, mock_chord, db_session
+):
+    """
+    Tests that the aggregator correctly dispatches history tasks directly
+    when no dependencies are missing.
+    """
+    mock_id_results = [{"region_ids": [1], "type_ids": [10]}]
+    dates = ["2023-01-01"]
+    mock_get_regions.return_value = {1}  # No missing regions
+    mock_get_types.return_value = {10}   # No missing types
 
-    # Check that delay was called on the chain
-    mock_chain.return_value.delay.assert_called_once()
+    aggregate_and_dispatch_dependencies(mock_id_results, dates)
+
+    mock_chord.assert_not_called()
+    mock_dispatch_delay.assert_called_once_with(dates=dates)
 
 
 @patch("app.tasks.data_fetching.chord")

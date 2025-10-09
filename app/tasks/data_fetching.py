@@ -153,10 +153,18 @@ def get_ids_from_date_file(date_str: str) -> dict:
 
 
 @shared_task
+def dispatch_market_history_tasks(dates: list[str]):
+    """Dispatches the market history processing tasks in a group."""
+    market_history_tasks = group(process_market_history.si(date) for date in dates)
+    market_history_tasks.delay()
+    logger.info(f"Dispatched market history processing for {len(dates)} dates.")
+
+
+@shared_task
 def aggregate_and_dispatch_dependencies(id_results: list, dates: list[str]):
     """
-    Receives results from ID gathering tasks, determines missing dependencies,
-    and dispatches creation and processing tasks.
+    Receives results from ID gathering, determines missing dependencies,
+    and uses a chord to ensure dependencies are created before history is processed.
     """
     db: Session = SessionLocal()
     try:
@@ -175,19 +183,23 @@ def aggregate_and_dispatch_dependencies(id_results: list, dates: list[str]):
         missing_type_ids = all_type_ids - existing_type_ids
         logger.info(f"Found {len(missing_type_ids)} new types to create.")
 
-        # Define task groups with immutable signatures to prevent unintended result passing
-        region_creation_tasks = group(create_region.si(rid) for rid in sorted(list(missing_region_ids)))
-        type_creation_tasks = group(create_type.si(tid) for tid in sorted(list(missing_type_ids)))
-        market_history_tasks = group(process_market_history.si(date) for date in dates)
-
-        # Create a chain of tasks: create dependencies first, then process history
-        workflow = chain(
-            region_creation_tasks,
-            type_creation_tasks,
-            market_history_tasks
+        # Combine all dependency creation tasks into a single group
+        dependency_creation_tasks = group(
+            *[create_region.si(rid) for rid in sorted(list(missing_region_ids))],
+            *[create_type.si(tid) for tid in sorted(list(missing_type_ids))]
         )
-        workflow.delay()
-        logger.info("Dependency creation and market history processing workflow started.")
+
+        if dependency_creation_tasks:
+            # Use a chord to ensure all dependencies are created before processing history
+            callback = dispatch_market_history_tasks.si(dates=dates)
+            workflow = chord(header=dependency_creation_tasks, body=callback)
+            workflow.delay()
+            logger.info("Dependency creation workflow started with a chord.")
+        else:
+            # If there are no dependencies to create, just dispatch the history tasks directly
+            logger.info("No new dependencies to create. Proceeding directly to market history processing.")
+            dispatch_market_history_tasks.delay(dates=dates)
+
     except Exception as e:
         logger.error(f"An error occurred during dependency aggregation: {e}")
     finally:
