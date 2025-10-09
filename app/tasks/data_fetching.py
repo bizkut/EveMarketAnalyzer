@@ -9,7 +9,7 @@ import pandas as pd
 from celery import shared_task
 from sqlalchemy.orm import Session
 
-from .. import crud, schemas
+from .. import crud, schemas, models
 from ..database import SessionLocal
 
 # Configure logging
