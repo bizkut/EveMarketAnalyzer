@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Eve Market Analyzer", lifespan=lifespan)
 
 # Include API router
-app.include_router(endpoints.router, prefix="/api")
+app.include_router(endpoints.router)
 
 # Add Celery Beat schedule
 @app.on_event("startup")
