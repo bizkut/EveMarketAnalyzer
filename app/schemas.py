@@ -73,3 +73,15 @@ class EveTypeCreate(EveTypeBase):
 class EveType(EveTypeBase):
     dogma_attributes: List[TypeDogmaAttribute] = []
     model_config = ConfigDict(from_attributes=True)
+
+# Market Analysis Schemas
+class MarketAnalysis(BaseModel):
+    type_id: int
+    type_name: str
+    region_id: int
+    region_name: str
+    demand: float
+    profit_margin: float
+
+class MarketAnalysisResult(BaseModel):
+    results: List[MarketAnalysis]

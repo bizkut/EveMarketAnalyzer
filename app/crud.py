@@ -1,6 +1,7 @@
 import logging
 from typing import List, Set, Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
@@ -130,3 +131,49 @@ def get_existing_type_ids(db: Session, type_ids: List[int]) -> Set[int]:
         return set()
     existing = db.query(models.EveType.type_id).filter(models.EveType.type_id.in_(type_ids)).all()
     return {t[0] for t in existing}
+
+def get_market_analysis(db: Session) -> List[schemas.MarketAnalysis]:
+    """
+    Analyzes market data to find the most demanding and profitable items.
+    """
+    # Calculate average volume (demand) and average high/low prices for each type and region
+    analysis_query = (
+        db.query(
+            models.MarketHistory.type_id,
+            models.EveType.name.label("type_name"),
+            models.MarketHistory.region_id,
+            models.Region.name.label("region_name"),
+            func.avg(models.MarketHistory.volume).label("demand"),
+            func.avg(models.MarketHistory.highest).label("avg_highest"),
+            func.avg(models.MarketHistory.lowest).label("avg_lowest"),
+        )
+        .join(models.EveType, models.MarketHistory.type_id == models.EveType.type_id)
+        .join(models.Region, models.MarketHistory.region_id == models.Region.region_id)
+        .group_by(
+            models.MarketHistory.type_id,
+            models.EveType.name,
+            models.MarketHistory.region_id,
+            models.Region.name,
+        )
+        .all()
+    )
+
+    results = []
+    for row in analysis_query:
+        # Profit margin calculation
+        profit_margin = 0
+        if row.avg_lowest and row.avg_lowest > 0:
+            profit_margin = ((row.avg_highest - row.avg_lowest) / row.avg_lowest) * 100
+
+        results.append(
+            schemas.MarketAnalysis(
+                type_id=row.type_id,
+                type_name=row.type_name,
+                region_id=row.region_id,
+                region_name=row.region_name,
+                demand=row.demand,
+                profit_margin=profit_margin,
+            )
+        )
+
+    return results

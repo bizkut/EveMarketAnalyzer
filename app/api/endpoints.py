@@ -1,6 +1,6 @@
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Security, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Security, status
 from fastapi.security import APIKeyHeader
 from sqlalchemy.orm import Session
 
@@ -59,3 +59,36 @@ async def refresh_market_data():
     """
     initial_data_load.delay()
     return {"message": "Market data refresh initiated."}
+
+@router.get(
+    "/analysis",
+    response_model=schemas.MarketAnalysisResult,
+    summary="Get market analysis for profitability and demand",
+)
+def get_market_analysis(
+    sort_by: str = Query(
+        "profit_margin",
+        description="Sort by 'profit_margin' or 'demand'",
+        regex="^(profit_margin|demand)$",
+    ),
+    db: Session = Depends(get_db),
+):
+    """
+    Provides a market analysis of all items across all regions, calculating
+    both the profit margin and the trading demand. The results can be sorted
+    by either metric in descending order.
+    """
+    analysis_results = crud.get_market_analysis(db)
+
+    # Sort results based on the query parameter
+    if sort_by == "profit_margin":
+        sorted_results = sorted(
+            analysis_results, key=lambda x: x.profit_margin, reverse=True
+        )
+    else:  # sort_by == "demand"
+        sorted_results = sorted(analysis_results, key=lambda x: x.demand, reverse=True)
+
+    # Limit to the top 100 results
+    top_100_results = sorted_results[:100]
+
+    return schemas.MarketAnalysisResult(results=top_100_results)
