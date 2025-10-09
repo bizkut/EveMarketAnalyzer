@@ -52,21 +52,11 @@ def create_bulk_market_history(
         db.rollback()
         raise
 
-def get_region(db: Session, region_id: int) -> Optional[models.Region]:
-    """
-    Retrieves a single region by its ID.
-    """
-    return db.query(models.Region).filter(models.Region.region_id == region_id).first()
-
 def get_or_create_region(db: Session, region: schemas.RegionCreate) -> models.Region:
     """
-    Retrieves a region if it exists, or creates it if it does not.
-    This function is designed to be safe for concurrent execution.
+    Creates a region, handling the race condition where another process
+    creates the same region concurrently.
     """
-    db_region = db.query(models.Region).filter(models.Region.region_id == region.region_id).first()
-    if db_region:
-        return db_region
-
     db_region = models.Region(**region.model_dump())
     db.add(db_region)
     try:
@@ -74,26 +64,16 @@ def get_or_create_region(db: Session, region: schemas.RegionCreate) -> models.Re
         db.refresh(db_region)
         return db_region
     except IntegrityError:
-        # A concurrent transaction inserted the same region.
+        # The region was created by another worker in the meantime.
         db.rollback()
         # The region must exist now, so we can query for it.
-        return db.query(models.Region).filter(models.Region.region_id == region.region_id).first()
-
-def get_type(db: Session, type_id: int) -> Optional[models.EveType]:
-    """
-    Retrieves a single EVE type by its ID.
-    """
-    return db.query(models.EveType).filter(models.EveType.type_id == type_id).first()
+        return db.query(models.Region).filter(models.Region.region_id == region.region_id).one()
 
 def get_or_create_type(db: Session, eve_type: schemas.EveTypeCreate) -> models.EveType:
     """
-    Retrieves an EVE type if it exists, or creates it if it does not.
-    This function is designed to be safe for concurrent execution.
+    Creates an EVE type, handling the race condition where another process
+    creates the same type concurrently.
     """
-    db_type = db.query(models.EveType).filter(models.EveType.type_id == eve_type.type_id).first()
-    if db_type:
-        return db_type
-
     db_type = models.EveType(**eve_type.model_dump())
     db.add(db_type)
     try:
@@ -102,7 +82,7 @@ def get_or_create_type(db: Session, eve_type: schemas.EveTypeCreate) -> models.E
         return db_type
     except IntegrityError:
         db.rollback()
-        return db.query(models.EveType).filter(models.EveType.type_id == eve_type.type_id).first()
+        return db.query(models.EveType).filter(models.EveType.type_id == eve_type.type_id).one()
 
 def is_database_empty(db: Session) -> bool:
     """

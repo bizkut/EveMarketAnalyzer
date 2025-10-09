@@ -30,12 +30,16 @@ def _fetch_esi_url(url: str):
         response.raise_for_status()
         return response.json()
 
-def _fetch_and_store_region_info(db: Session, region_id: int):
-    """Helper to fetch and store a single region's info."""
-    if crud.get_region(db, region_id):
-        logger.info(f"Region {region_id} already exists. Skipping.")
+def _ensure_region_exists(db: Session, region_id: int):
+    """
+    Fetches and stores region info if it doesn't already exist.
+    Relies on an atomic CRUD operation to handle race conditions.
+    """
+    # First, check if the region exists to avoid unnecessary API calls.
+    if db.query(models.Region).filter(models.Region.region_id == region_id).first():
         return
 
+    # If not, fetch from API and use the atomic get_or_create function.
     url = f"{ESI_API_BASE_URL}/universe/regions/{region_id}/"
     logger.info(f"Fetching region info for {region_id}")
     data = _fetch_esi_url(url)
@@ -46,12 +50,13 @@ def _fetch_and_store_region_info(db: Session, region_id: int):
         description=data.get('description', '')
     )
     crud.get_or_create_region(db, region_create)
-    logger.info(f"Successfully stored region {region_id}")
 
-def _fetch_and_store_type_info(db: Session, type_id: int):
-    """Helper to fetch and store a single type's info."""
-    if crud.get_type(db, type_id):
-        logger.info(f"Type {type_id} already exists. Skipping.")
+def _ensure_type_exists(db: Session, type_id: int):
+    """
+    Fetches and stores type info if it doesn't already exist.
+    Relies on an atomic CRUD operation to handle race conditions.
+    """
+    if db.query(models.EveType).filter(models.EveType.type_id == type_id).first():
         return
 
     url = f"{ESI_API_BASE_URL}/universe/types/{type_id}/"
@@ -67,7 +72,6 @@ def _fetch_and_store_type_info(db: Session, type_id: int):
         icon_url=icon_url
     )
     crud.get_or_create_type(db, type_create)
-    logger.info(f"Successfully stored type {type_id}")
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
@@ -86,18 +90,12 @@ def fetch_and_store_market_history(self, date_str: str):
         all_region_ids = {int(rid) for rid in df['region_id'].unique()}
         all_type_ids = {int(tid) for tid in df['type_id'].unique()}
 
-        existing_regions = crud.get_existing_region_ids(db, list(all_region_ids))
-        existing_types = crud.get_existing_type_ids(db, list(all_type_ids))
+        # Ensure all required regions and types exist, creating them if necessary.
+        for region_id in all_region_ids:
+            _ensure_region_exists(db, region_id)
 
-        new_regions_to_fetch = all_region_ids - existing_regions
-        new_types_to_fetch = all_type_ids - existing_types
-
-        # Fetch and store new regions and types synchronously
-        for region_id in new_regions_to_fetch:
-            _fetch_and_store_region_info(db, region_id)
-
-        for type_id in new_types_to_fetch:
-            _fetch_and_store_type_info(db, type_id)
+        for type_id in all_type_ids:
+            _ensure_type_exists(db, type_id)
 
         # Now that dependencies are met, bulk insert market data
         history_records = [
