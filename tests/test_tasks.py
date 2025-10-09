@@ -16,6 +16,8 @@ from app.tasks.data_fetching import (
     initial_data_load,
     daily_update_task,
     get_ids_from_date_file,
+    aggregate_and_dispatch_dependencies,
+    chord,
 )
 
 
@@ -97,69 +99,76 @@ def test_get_ids_from_date_file(mock_http_get):
 
     result = get_ids_from_date_file("2023-01-01")
 
-    assert result["region_ids"] == {10000002, 10000003}
-    assert result["type_ids"] == {34, 35}
+    assert isinstance(result["region_ids"], list)
+    assert isinstance(result["type_ids"], list)
+    assert set(result["region_ids"]) == {10000002, 10000003}
+    assert set(result["type_ids"]) == {34, 35}
 
 
 @patch("app.tasks.data_fetching.chain")
 @patch("app.tasks.data_fetching.group")
 @patch("app.tasks.data_fetching.crud.get_existing_type_ids")
 @patch("app.tasks.data_fetching.crud.get_existing_region_ids")
-def test_orchestrate_market_data_load(
+def test_aggregate_and_dispatch_dependencies(
     mock_get_regions, mock_get_types, mock_group, mock_chain, db_session
 ):
-    # Mock the result of the ID gathering tasks
+    # Input to the aggregator task
     mock_id_results = [
-        {"region_ids": {10000002, 10000003}, "type_ids": {34, 35}},
-        {"region_ids": {10000002, 10000004}, "type_ids": {34, 36}},
+        {"region_ids": [10000002, 10000003], "type_ids": [34, 35]},
+        {"region_ids": [10000002, 10000004], "type_ids": [34, 36]},
     ]
-
-    # Mock the group and chain machinery
-    mock_async_result = MagicMock()
-    mock_async_result.get.return_value = mock_id_results
-
-    mock_id_gathering_group = MagicMock()
-    mock_id_gathering_group.apply_async.return_value = mock_async_result
-
-    # The group() call will be used for 3 things: id gathering, region creation, type creation, history processing
-    # We want to intercept the first call and return our special mock.
-    mock_group.side_effect = [
-        mock_id_gathering_group, # First call is for ID gathering
-        MagicMock(),             # Second is for region creation
-        MagicMock(),             # Third is for type creation
-        MagicMock()              # Fourth is for history processing
-    ]
+    dates = ["2023-01-01", "2023-01-02"]
 
     # Mock DB lookups
     mock_get_regions.return_value = {10000002}  # 10000003 and 10000004 are missing
     mock_get_types.return_value = {34}          # 35 and 36 are missing
 
-    # Call the orchestrator
-    orchestrate_market_data_load(["2023-01-01", "2023-01-02"])
+    # Call the aggregator
+    aggregate_and_dispatch_dependencies(mock_id_results, dates)
 
     # Assertions
     mock_get_regions.assert_called_once()
     mock_get_types.assert_called_once()
 
-    # Check that the ID gathering group was called correctly
-    id_gathering_call_args = mock_group.call_args_list[0].args[0]
-    assert len(list(id_gathering_call_args)) == 2 # Called for 2 dates
-
     # Check that groups were created for the *missing* items
-    # Region call is the second time mock_group is called
-    region_creation_group_call_args = mock_group.call_args_list[1].args[0]
-    assert len(list(region_creation_group_call_args)) == 2 # 2 missing regions
+    assert mock_group.call_count == 3
 
-    # Type call is the third time
-    type_creation_group_call_args = mock_group.call_args_list[2].args[0]
-    assert len(list(type_creation_group_call_args)) == 2 # 2 missing types
+    # Region call
+    region_creation_group_call_args = mock_group.call_args_list[0].args[0]
+    assert set(s.args[0] for s in region_creation_group_call_args) == {10000003, 10000004}
 
-    # History call is the fourth time
-    history_processing_group_call_args = mock_group.call_args_list[3].args[0]
-    assert len(list(history_processing_group_call_args)) == 2 # 2 dates
+    # Type call
+    type_creation_group_call_args = mock_group.call_args_list[1].args[0]
+    assert set(s.args[0] for s in type_creation_group_call_args) == {35, 36}
+
+    # History call
+    history_processing_group_call_args = mock_group.call_args_list[2].args[0]
+    assert set(s.args[0] for s in history_processing_group_call_args) == set(dates)
 
     mock_chain.assert_called_once()
     mock_chain.return_value.delay.assert_called_once()
+
+
+@patch("app.tasks.data_fetching.chord")
+@patch("app.tasks.data_fetching.group")
+@patch("app.tasks.data_fetching.aggregate_and_dispatch_dependencies")
+def test_orchestrate_market_data_load(mock_aggregator, mock_group, mock_chord):
+    dates = ["2023-01-01", "2023-01-02"]
+
+    # Call the orchestrator
+    orchestrate_market_data_load(dates)
+
+    # Assert that a group of ID gathering tasks was created
+    mock_group.assert_called_once()
+    id_gathering_call_args = mock_group.call_args_list[0].args[0]
+    assert len(list(id_gathering_call_args)) == 2
+
+    # Assert that the aggregator (callback) was prepared correctly
+    mock_aggregator.s.assert_called_once_with(dates=dates)
+
+    # Assert that the chord was created and delayed
+    mock_chord.assert_called_once()
+    mock_chord.return_value.delay.assert_called_once()
 
 
 @patch("app.tasks.data_fetching.orchestrate_market_data_load.delay")
