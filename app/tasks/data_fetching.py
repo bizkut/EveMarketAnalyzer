@@ -23,11 +23,51 @@ EVEREF_DATA_URL = "https://data.everef.net/market-history"
 
 
 @backoff.on_exception(backoff.expo, httpx.RequestError, max_tries=5)
-async def fetch_url(url: str):
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, follow_redirects=True)
+def _fetch_esi_url(url: str):
+    """Synchronous URL fetcher with backoff for ESI calls."""
+    with httpx.Client() as client:
+        response = client.get(url, follow_redirects=True)
         response.raise_for_status()
-        return response
+        return response.json()
+
+def _fetch_and_store_region_info(db: Session, region_id: int):
+    """Helper to fetch and store a single region's info."""
+    if crud.get_region(db, region_id):
+        logger.info(f"Region {region_id} already exists. Skipping.")
+        return
+
+    url = f"{ESI_API_BASE_URL}/universe/regions/{region_id}/"
+    logger.info(f"Fetching region info for {region_id}")
+    data = _fetch_esi_url(url)
+
+    region_create = schemas.RegionCreate(
+        region_id=region_id,
+        name=data.get('name'),
+        description=data.get('description', '')
+    )
+    crud.get_or_create_region(db, region_create)
+    logger.info(f"Successfully stored region {region_id}")
+
+def _fetch_and_store_type_info(db: Session, type_id: int):
+    """Helper to fetch and store a single type's info."""
+    if crud.get_type(db, type_id):
+        logger.info(f"Type {type_id} already exists. Skipping.")
+        return
+
+    url = f"{ESI_API_BASE_URL}/universe/types/{type_id}/"
+    logger.info(f"Fetching type info for {type_id}")
+    data = _fetch_esi_url(url)
+
+    icon_url = f"https://images.evetech.net/types/{type_id}/icon"
+
+    type_create = schemas.EveTypeCreate(
+        type_id=type_id,
+        name=data.get('name'),
+        description=data.get('description', ''),
+        icon_url=icon_url
+    )
+    crud.get_or_create_type(db, type_create)
+    logger.info(f"Successfully stored type {type_id}")
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
@@ -43,7 +83,6 @@ def fetch_and_store_market_history(self, date_str: str):
         decompressed_data = bz2.decompress(response.content)
         df = pd.read_csv(io.BytesIO(decompressed_data))
 
-        # Pre-fetch existing regions and types to reduce DB queries inside the loop
         all_region_ids = {int(rid) for rid in df['region_id'].unique()}
         all_type_ids = {int(tid) for tid in df['type_id'].unique()}
 
@@ -53,13 +92,14 @@ def fetch_and_store_market_history(self, date_str: str):
         new_regions_to_fetch = all_region_ids - existing_regions
         new_types_to_fetch = all_type_ids - existing_types
 
+        # Fetch and store new regions and types synchronously
         for region_id in new_regions_to_fetch:
-            fetch_region_info.delay(region_id)
+            _fetch_and_store_region_info(db, region_id)
 
         for type_id in new_types_to_fetch:
-            fetch_type_info.delay(type_id)
+            _fetch_and_store_type_info(db, type_id)
 
-        # Bulk insert market data
+        # Now that dependencies are met, bulk insert market data
         history_records = [
             schemas.MarketHistoryCreate(**row) for row in df.to_dict('records')
         ]
@@ -68,74 +108,12 @@ def fetch_and_store_market_history(self, date_str: str):
 
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error fetching {date_str}: {e}")
-        # Don't retry for 404 Not Found, as the data for the day may not exist
         if e.response.status_code == 404:
             return
         self.retry(exc=e)
     except Exception as e:
         logger.error(f"An error occurred while processing market history for {date_str}: {e}")
         self.retry(exc=e)
-    finally:
-        db.close()
-
-
-@shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def fetch_region_info(self, region_id: int):
-    db: Session = SessionLocal()
-    try:
-        if crud.get_region(db, region_id):
-            logger.info(f"Region {region_id} already exists. Skipping.")
-            return
-
-        url = f"{ESI_API_BASE_URL}/universe/regions/{region_id}/"
-        logger.info(f"Fetching region info for {region_id}")
-        response = httpx.get(url)
-        response.raise_for_status()
-        data = response.json()
-
-        region_create = schemas.RegionCreate(
-            region_id=region_id,
-            name=data.get('name'),
-            description=data.get('description', '')
-        )
-        crud.get_or_create_region(db, region_create)
-        logger.info(f"Successfully stored region {region_id}")
-
-    except httpx.RequestError as exc:
-        logger.error(f"Error fetching region {region_id}: {exc}")
-        self.retry(exc=exc)
-    finally:
-        db.close()
-
-
-@shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def fetch_type_info(self, type_id: int):
-    db: Session = SessionLocal()
-    try:
-        if crud.get_type(db, type_id):
-            logger.info(f"Type {type_id} already exists. Skipping.")
-            return
-
-        url = f"{ESI_API_BASE_URL}/universe/types/{type_id}/"
-        logger.info(f"Fetching type info for {type_id}")
-        response = httpx.get(url)
-        response.raise_for_status()
-        data = response.json()
-
-        icon_url = f"https://images.evetech.net/types/{type_id}/icon"
-
-        type_create = schemas.EveTypeCreate(
-            type_id=type_id,
-            name=data.get('name'),
-            description=data.get('description', ''),
-            icon_url=icon_url
-        )
-        crud.get_or_create_type(db, type_create)
-        logger.info(f"Successfully stored type {type_id}")
-
-    except httpx.RequestError as exc:
-        logger.error(f"Error fetching type {type_id}: {exc}")
-        self.retry(exc=exc)
     finally:
         db.close()
 
