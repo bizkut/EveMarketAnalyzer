@@ -1,5 +1,6 @@
 import bz2
 import io
+import json
 from datetime import date, datetime
 from unittest.mock import patch, MagicMock, call
 
@@ -103,6 +104,26 @@ def test_get_ids_from_date_file(mock_http_get):
     assert isinstance(result["type_ids"], list)
     assert set(result["region_ids"]) == {10000002, 10000003}
     assert set(result["type_ids"]) == {34, 35}
+
+def test_get_ids_from_date_file_is_json_serializable():
+    # This test ensures that the output of the task can be serialized to JSON,
+    # preventing regressions of the int64 issue.
+    # We create a dataframe with numpy's default int64 type.
+    df = pd.DataFrame({
+        "region_id": [10000002, 10000003],
+        "type_id": [34, 35]
+    })
+
+    # Create a mock that returns this dataframe
+    with patch('pandas.read_csv', return_value=df):
+        with patch('httpx.get'): # We still need to patch the network call
+            result = get_ids_from_date_file("2023-01-01")
+
+    # Attempt to serialize the result to JSON
+    try:
+        json.dumps(result)
+    except TypeError:
+        pytest.fail("The result of get_ids_from_date_file is not JSON serializable")
 
 
 @patch("app.tasks.data_fetching.chain")

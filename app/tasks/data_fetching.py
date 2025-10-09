@@ -138,8 +138,9 @@ def get_ids_from_date_file(date_str: str) -> dict:
         response.raise_for_status()
         decompressed_data = bz2.decompress(response.content)
         df = pd.read_csv(io.BytesIO(decompressed_data), usecols=["region_id", "type_id"])
-        region_ids = list(df["region_id"].unique())
-        type_ids = list(df["type_id"].unique())
+        # Ensure NumPy types are converted to standard Python types for JSON serialization
+        region_ids = [int(rid) for rid in df["region_id"].unique()]
+        type_ids = [int(tid) for tid in df["type_id"].unique()]
         return {"region_ids": region_ids, "type_ids": type_ids}
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
