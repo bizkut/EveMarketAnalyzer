@@ -19,8 +19,6 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("Starting up...")
     # Create database tables
-    # First, drop all tables to ensure schema changes are applied
-    models.Base.metadata.drop_all(bind=engine)
     models.Base.metadata.create_all(bind=engine)
 
     if not settings.TESTING:
