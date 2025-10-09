@@ -30,50 +30,6 @@ def _fetch_esi_url(url: str):
         response.raise_for_status()
         return response.json()
 
-def _ensure_region_exists(db: Session, region_id: int):
-    """
-    Fetches and stores region info if it doesn't already exist.
-    Relies on an atomic CRUD operation to handle race conditions.
-    """
-    # First, check if the region exists to avoid unnecessary API calls.
-    if db.query(models.Region).filter(models.Region.region_id == region_id).first():
-        return
-
-    # If not, fetch from API and use the atomic get_or_create function.
-    url = f"{ESI_API_BASE_URL}/universe/regions/{region_id}/"
-    logger.info(f"Fetching region info for {region_id}")
-    data = _fetch_esi_url(url)
-
-    region_create = schemas.RegionCreate(
-        region_id=region_id,
-        name=data.get('name'),
-        description=data.get('description', '')
-    )
-    crud.get_or_create_region(db, region_create)
-
-def _ensure_type_exists(db: Session, type_id: int):
-    """
-    Fetches and stores type info if it doesn't already exist.
-    Relies on an atomic CRUD operation to handle race conditions.
-    """
-    if db.query(models.EveType).filter(models.EveType.type_id == type_id).first():
-        return
-
-    url = f"{ESI_API_BASE_URL}/universe/types/{type_id}/"
-    logger.info(f"Fetching type info for {type_id}")
-    data = _fetch_esi_url(url)
-
-    icon_url = f"https://images.evetech.net/types/{type_id}/icon"
-
-    type_create = schemas.EveTypeCreate(
-        type_id=type_id,
-        name=data.get('name'),
-        description=data.get('description', ''),
-        icon_url=icon_url
-    )
-    crud.get_or_create_type(db, type_create)
-
-
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def fetch_and_store_market_history(self, date_str: str):
     db: Session = SessionLocal()
@@ -87,22 +43,60 @@ def fetch_and_store_market_history(self, date_str: str):
         decompressed_data = bz2.decompress(response.content)
         df = pd.read_csv(io.BytesIO(decompressed_data))
 
-        all_region_ids = {int(rid) for rid in df['region_id'].unique()}
-        all_type_ids = {int(tid) for tid in df['type_id'].unique()}
+        all_region_ids = {int(rid) for rid in df["region_id"].unique()}
+        all_type_ids = {int(tid) for tid in df["type_id"].unique()}
 
-        # Ensure all required regions and types exist, creating them if necessary.
-        for region_id in all_region_ids:
-            _ensure_region_exists(db, region_id)
+        # Efficiently determine which regions and types are missing from the database
+        existing_region_ids = crud.get_existing_region_ids(db, list(all_region_ids))
+        missing_region_ids = all_region_ids - existing_region_ids
+        if missing_region_ids:
+            logger.info(f"Found {len(missing_region_ids)} new regions to fetch.")
+            for region_id in missing_region_ids:
+                try:
+                    region_url = f"{ESI_API_BASE_URL}/universe/regions/{region_id}/"
+                    logger.info(f"Fetching region info for {region_id}")
+                    data = _fetch_esi_url(region_url)
+                    region_create = schemas.RegionCreate(
+                        region_id=region_id,
+                        name=data.get("name"),
+                        description=data.get("description", ""),
+                    )
+                    crud.get_or_create_region(db, region_create)
+                except Exception as e:
+                    logger.error(
+                        f"Skipping region {region_id} due to fetch/create error: {e}"
+                    )
 
-        for type_id in all_type_ids:
-            _ensure_type_exists(db, type_id)
+        existing_type_ids = crud.get_existing_type_ids(db, list(all_type_ids))
+        missing_type_ids = all_type_ids - existing_type_ids
+        if missing_type_ids:
+            logger.info(f"Found {len(missing_type_ids)} new types to fetch.")
+            for type_id in missing_type_ids:
+                try:
+                    type_url = f"{ESI_API_BASE_URL}/universe/types/{type_id}/"
+                    logger.info(f"Fetching type info for {type_id}")
+                    data = _fetch_esi_url(type_url)
+                    icon_url = f"https://images.evetech.net/types/{type_id}/icon"
+                    type_create = schemas.EveTypeCreate(
+                        type_id=type_id,
+                        name=data.get("name"),
+                        description=data.get("description", ""),
+                        icon_url=icon_url,
+                    )
+                    crud.get_or_create_type(db, type_create)
+                except Exception as e:
+                    logger.error(
+                        f"Skipping type {type_id} due to fetch/create error: {e}"
+                    )
 
         # Now that dependencies are met, bulk insert market data
         history_records = [
-            schemas.MarketHistoryCreate(**row) for row in df.to_dict('records')
+            schemas.MarketHistoryCreate(**row) for row in df.to_dict("records")
         ]
         crud.create_bulk_market_history(db, history_records)
-        logger.info(f"Successfully stored {len(history_records)} market history records for {date_str}")
+        logger.info(
+            f"Successfully stored {len(history_records)} market history records for {date_str}"
+        )
 
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error fetching {date_str}: {e}")
