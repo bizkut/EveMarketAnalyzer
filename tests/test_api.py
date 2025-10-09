@@ -10,8 +10,12 @@ from app import crud, schemas
 
 def test_get_market_history(client: TestClient, db_session: Session):
     # First, create some test data
-    region = crud.get_or_create_region(db_session, schemas.RegionCreate(region_id=1, name="Test Region"))
-    eve_type = crud.get_or_create_type(db_session, schemas.EveTypeCreate(type_id=1, name="Test Type"))
+    region = crud.get_or_create_region(
+        db_session, schemas.RegionCreate(region_id=1, name="Test Region")
+    )
+    eve_type = crud.get_or_create_type(
+        db_session, schemas.EveTypeCreate(type_id=1, name="Test Type")
+    )
 
     history_data = schemas.MarketHistoryCreate(
         date=date(2023, 1, 1),
@@ -38,7 +42,9 @@ def test_get_market_history(client: TestClient, db_session: Session):
 def test_get_market_history_not_found(client: TestClient, db_session: Session):
     response = client.get("/markets/999/history?type_id=999")
     assert response.status_code == 404
-    assert response.json() == {"detail": "No market history found for the specified region and type."}
+    assert response.json() == {
+        "detail": "No market history found for the specified region and type."
+    }
 
 
 @patch("app.api.endpoints.initial_data_load")
@@ -47,6 +53,14 @@ def test_refresh_endpoint_success(mock_initial_data_load, client: TestClient):
     assert response.status_code == 202
     assert response.json() == {"message": "Market data refresh initiated."}
     mock_initial_data_load.delay.assert_called_once()
+
+
+@patch("app.api.endpoints.daily_update_task")
+def test_refresh_daily_endpoint_success(mock_daily_update_task, client: TestClient):
+    response = client.post("/refresh/daily", headers={"X-API-KEY": "test_api_key"})
+    assert response.status_code == 202
+    assert response.json() == {"message": "Daily market data refresh initiated."}
+    mock_daily_update_task.delay.assert_called_once()
 
 
 def test_refresh_endpoint_no_key(client: TestClient):
@@ -63,27 +77,41 @@ def test_refresh_endpoint_wrong_key(client: TestClient):
 
 def test_get_market_analysis(client: TestClient, db_session: Session):
     # Create test data
-    region1 = crud.get_or_create_region(db_session, schemas.RegionCreate(region_id=1, name="The Forge"))
-    region2 = crud.get_or_create_region(db_session, schemas.RegionCreate(region_id=2, name="Domain"))
-    type1 = crud.get_or_create_type(db_session, schemas.EveTypeCreate(type_id=1, name="Tritanium"))
-    type2 = crud.get_or_create_type(db_session, schemas.EveTypeCreate(type_id=2, name="Pyerite"))
+    region1 = crud.get_or_create_region(
+        db_session, schemas.RegionCreate(region_id=1, name="The Forge")
+    )
+    region2 = crud.get_or_create_region(
+        db_session, schemas.RegionCreate(region_id=2, name="Domain")
+    )
+    type1 = crud.get_or_create_type(
+        db_session, schemas.EveTypeCreate(type_id=1, name="Tritanium")
+    )
+    type2 = crud.get_or_create_type(
+        db_session, schemas.EveTypeCreate(type_id=2, name="Pyerite")
+    )
 
-    # History for Tritanium in The Forge (High profit, low demand)
-    crud.create_bulk_market_history(db_session, [
-        schemas.MarketHistoryCreate(date=date(2023, 1, 1), average=10, highest=20, lowest=10, order_count=10, volume=100, region_id=region1.region_id, type_id=type1.type_id),
-        schemas.MarketHistoryCreate(date=date(2023, 1, 2), average=12, highest=22, lowest=12, order_count=12, volume=120, region_id=region1.region_id, type_id=type1.type_id),
-    ])
-
-    # History for Pyerite in The Forge (Low profit, high demand)
-    crud.create_bulk_market_history(db_session, [
-        schemas.MarketHistoryCreate(date=date(2023, 1, 1), average=50, highest=55, lowest=50, order_count=100, volume=1000, region_id=region1.region_id, type_id=type2.type_id),
-        schemas.MarketHistoryCreate(date=date(2023, 1, 2), average=52, highest=57, lowest=52, order_count=120, volume=1200, region_id=region1.region_id, type_id=type2.type_id),
-    ])
-
-    # History for Tritanium in Domain (Medium profit, medium demand)
-    crud.create_bulk_market_history(db_session, [
-        schemas.MarketHistoryCreate(date=date(2023, 1, 1), average=15, highest=25, lowest=15, order_count=50, volume=500, region_id=region2.region_id, type_id=type1.type_id),
-    ])
+    # Pre-calculated analysis data
+    analysis_data = [
+        schemas.MarketAnalysisCreate(
+            type_id=type1.type_id,
+            region_id=region1.region_id,
+            demand=110,
+            profit_margin=100.0,
+        ),
+        schemas.MarketAnalysisCreate(
+            type_id=type2.type_id,
+            region_id=region1.region_id,
+            demand=1100,
+            profit_margin=10.0,
+        ),
+        schemas.MarketAnalysisCreate(
+            type_id=type1.type_id,
+            region_id=region2.region_id,
+            demand=500,
+            profit_margin=50.0,
+        ),
+    ]
+    crud.create_or_update_market_analysis(db_session, analysis_data)
 
     # Test sorting by profit_margin
     response = client.get("/analysis?sort_by=profit_margin")
@@ -92,7 +120,7 @@ def test_get_market_analysis(client: TestClient, db_session: Session):
     assert len(data) == 3
     assert data[0]["type_name"] == "Tritanium"
     assert data[0]["region_name"] == "The Forge"
-    assert data[0]["profit_margin"] == pytest.approx(90.9090909090909)
+    assert data[0]["profit_margin"] == 100.0
     assert data[1]["type_name"] == "Tritanium"
     assert data[1]["region_name"] == "Domain"
     assert data[2]["type_name"] == "Pyerite"

@@ -1,9 +1,9 @@
 import logging
 from typing import List, Set, Optional
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from . import models, schemas
 
@@ -132,48 +132,58 @@ def get_existing_type_ids(db: Session, type_ids: List[int]) -> Set[int]:
     existing = db.query(models.EveType.type_id).filter(models.EveType.type_id.in_(type_ids)).all()
     return {t[0] for t in existing}
 
-def get_market_analysis(db: Session) -> List[schemas.MarketAnalysis]:
-    """
-    Analyzes market data to find the most demanding and profitable items.
-    """
-    # Calculate average volume (demand) and average high/low prices for each type and region
-    analysis_query = (
-        db.query(
-            models.MarketHistory.type_id,
-            models.EveType.name.label("type_name"),
-            models.MarketHistory.region_id,
-            models.Region.name.label("region_name"),
-            func.avg(models.MarketHistory.volume).label("demand"),
-            func.avg(models.MarketHistory.highest).label("avg_highest"),
-            func.avg(models.MarketHistory.lowest).label("avg_lowest"),
-        )
-        .join(models.EveType, models.MarketHistory.type_id == models.EveType.type_id)
-        .join(models.Region, models.MarketHistory.region_id == models.Region.region_id)
-        .group_by(
-            models.MarketHistory.type_id,
-            models.EveType.name,
-            models.MarketHistory.region_id,
-            models.Region.name,
-        )
-        .all()
-    )
 
-    results = []
-    for row in analysis_query:
-        # Profit margin calculation
-        profit_margin = 0
-        if row.avg_lowest and row.avg_lowest > 0:
-            profit_margin = ((row.avg_highest - row.avg_lowest) / row.avg_lowest) * 100
+def create_or_update_market_analysis(
+    db: Session, analysis_records: List[schemas.MarketAnalysisCreate]
+):
+    """
+    Bulk creates or updates market analysis records.
+    Uses ON CONFLICT DO UPDATE for PostgreSQL for efficiency.
+    Falls back to a slower, iterative approach for other databases.
+    """
+    if not analysis_records:
+        return
 
-        results.append(
-            schemas.MarketAnalysis(
-                type_id=row.type_id,
-                type_name=row.type_name,
-                region_id=row.region_id,
-                region_name=row.region_name,
-                demand=row.demand,
-                profit_margin=profit_margin,
+    if db.bind.dialect.name == "postgresql":
+        stmt = pg_insert(models.MarketAnalysis).values(
+            [record.model_dump() for record in analysis_records]
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["type_id", "region_id"],
+            set_={
+                "demand": stmt.excluded.demand,
+                "profit_margin": stmt.excluded.profit_margin,
+            },
+        )
+        db.execute(stmt)
+    else:
+        # Fallback for non-PostgreSQL databases (like SQLite in tests)
+        for record in analysis_records:
+            existing_record = (
+                db.query(models.MarketAnalysis)
+                .filter_by(type_id=record.type_id, region_id=record.region_id)
+                .first()
             )
-        )
+            if existing_record:
+                existing_record.demand = record.demand
+                existing_record.profit_margin = record.profit_margin
+            else:
+                db.add(models.MarketAnalysis(**record.model_dump()))
 
-    return results
+    db.commit()
+
+
+def get_market_analysis(
+    db: Session, sort_by: str, limit: int = 100
+) -> List[models.MarketAnalysis]:
+    """
+    Retrieves pre-calculated market analysis data, sorted and limited.
+    """
+    query = db.query(models.MarketAnalysis).join(models.EveType).join(models.Region)
+
+    if sort_by == "profit_margin":
+        query = query.order_by(models.MarketAnalysis.profit_margin.desc())
+    else:  # sort_by == "demand"
+        query = query.order_by(models.MarketAnalysis.demand.desc())
+
+    return query.limit(limit).all()

@@ -111,16 +111,34 @@ def test_download_and_extract_ids(mock_stream, mock_open, mock_makedirs):
     assert result["type_ids"] == [34]
 
 
+@patch("app.tasks.data_fetching.chord")
 @patch("app.tasks.data_fetching.group")
-def test_dispatch_market_history_tasks(mock_group):
+def test_dispatch_market_history_tasks(mock_group, mock_chord):
+    """
+    Tests that dispatch_market_history_tasks creates a chord with the correct
+    header and callback, and that the workflow is delayed.
+    """
     processing_info = [{"file_path": FILE_PATH, "date": DATE_STR}]
-    dispatch_market_history_tasks(processing_info)
 
+    # Mock the signature for the analysis task
+    mock_analysis_sig = MagicMock()
+    with patch(
+        "app.tasks.data_fetching.perform_market_analysis.si",
+        return_value=mock_analysis_sig,
+    ):
+        dispatch_market_history_tasks(processing_info)
+
+    # Check that a group of tasks was created for the header
     mock_group.assert_called_once()
-    task_sig = mock_group.call_args[0][0][0]
+    tasks_list = list(mock_group.call_args.args[0])
+    assert len(tasks_list) == 1
+    task_sig = tasks_list[0]
     assert task_sig.immutable is True
     assert task_sig.args == (FILE_PATH, DATE_STR)
-    mock_group.return_value.delay.assert_called_once()
+
+    # Check that the chord was created with the group and the analysis callback
+    mock_chord.assert_called_once_with(mock_group.return_value, mock_analysis_sig)
+    mock_chord.return_value.delay.assert_called_once()
 
 
 @patch("app.tasks.data_fetching.chord")
