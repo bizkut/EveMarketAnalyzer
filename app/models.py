@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Date, Text, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, Float, Date, Text, ForeignKey, Boolean, BigInteger
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -10,8 +10,8 @@ class MarketHistory(Base):
     date = Column(Date)
     highest = Column(Float)
     lowest = Column(Float)
-    order_count = Column(Integer)
-    volume = Column(Integer)
+    order_count = Column(BigInteger)
+    volume = Column(BigInteger)
     region_id = Column(Integer, ForeignKey("regions.region_id"))
     type_id = Column(Integer, ForeignKey("eve_types.type_id"))
 

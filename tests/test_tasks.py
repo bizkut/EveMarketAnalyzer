@@ -59,9 +59,10 @@ def test_create_type(mock_get_or_create_type, mock_fetch_esi, db_session):
 @patch("httpx.get")
 def test_process_market_history(mock_http_get, mock_create_bulk, db_session):
     # Create a dummy CSV and compress it
+    # Use large numbers for volume and order_count to test BigInteger capacity
     df = pd.DataFrame({
         "date": ["2023-01-01"], "average": [100.0], "highest": [110.0],
-        "lowest": [90.0], "order_count": [10], "volume": [1000],
+        "lowest": [90.0], "order_count": [5_000_000_000], "volume": [10_000_000_000],
         "region_id": [10000002], "type_id": [34]
     })
     csv_data = df.to_csv(index=False).encode("utf-8")
