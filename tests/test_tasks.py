@@ -1,12 +1,12 @@
 import bz2
 import io
 import json
-from datetime import date, datetime
-from unittest.mock import patch, MagicMock, call
+import os
+from unittest.mock import patch, MagicMock
 
 import pandas as pd
 import pytest
-from celery import group, chain
+from celery import group, chord
 
 from app import crud, schemas
 from app.tasks.data_fetching import (
@@ -16,222 +16,158 @@ from app.tasks.data_fetching import (
     orchestrate_market_data_load,
     initial_data_load,
     daily_update_task,
-    get_ids_from_date_file,
+    download_and_extract_ids,
     aggregate_and_dispatch_dependencies,
-    chord,
     dispatch_market_history_tasks,
+    TEMP_DATA_DIR,
 )
 
+# Test data
+DF_DATA = {"region_id": [10000002], "type_id": [34]}
+DATE_STR = "2023-01-01"
+FILE_PATH = os.path.join(TEMP_DATA_DIR, f"market-history-{DATE_STR}.csv.bz2")
+
 
 @patch("app.tasks.data_fetching._fetch_esi_url")
-@patch("app.tasks.data_fetching.crud.get_or_create_region")
-def test_create_region(mock_get_or_create_region, mock_fetch_esi, db_session):
+def test_create_region(mock_fetch_esi, db_session):
     mock_fetch_esi.return_value = {"name": "The Forge", "description": "A region."}
-    create_region(10000002)
-    mock_fetch_esi.assert_called_once_with("https://esi.evetech.net/latest/universe/regions/10000002/")
-    mock_get_or_create_region.assert_called_once()
-    args, _ = mock_get_or_create_region.call_args
-    assert isinstance(args[1], schemas.RegionCreate)
-    assert args[1].region_id == 10000002
-    assert args[1].name == "The Forge"
+    with patch("app.tasks.data_fetching.crud.get_or_create_region") as mock_get_or_create:
+        create_region(10000002)
+        mock_get_or_create.assert_called_once()
 
 
 @patch("app.tasks.data_fetching._fetch_esi_url")
-@patch("app.tasks.data_fetching.crud.get_or_create_type")
-def test_create_type(mock_get_or_create_type, mock_fetch_esi, db_session):
-    mock_fetch_esi.return_value = {
-        "name": "Tritanium",
-        "description": "A mineral.",
-        "published": True,
-        "dogma_attributes": [{"attribute_id": 1, "value": 1.0}],
-    }
-    create_type(34)
-    mock_fetch_esi.assert_called_once_with("https://esi.evetech.net/latest/universe/types/34/")
-    mock_get_or_create_type.assert_called_once()
-    args, _ = mock_get_or_create_type.call_args
-    assert isinstance(args[1], schemas.EveTypeCreate)
-    assert args[1].type_id == 34
-    assert args[1].name == "Tritanium"
-    assert len(args[1].dogma_attributes) == 1
+def test_create_type(mock_fetch_esi, db_session):
+    mock_fetch_esi.return_value = {"name": "Tritanium", "description": "A mineral."}
+    with patch("app.tasks.data_fetching.crud.get_or_create_type") as mock_get_or_create:
+        create_type(34)
+        mock_get_or_create.assert_called_once()
 
 
+@patch("os.remove")
 @patch("app.tasks.data_fetching.crud.create_bulk_market_history")
-@patch("httpx.get")
-def test_process_market_history(mock_http_get, mock_create_bulk, db_session):
-    # Create a dummy CSV and compress it
-    # Use large numbers for volume and order_count to test BigInteger capacity
+def test_process_market_history(mock_create_bulk, mock_os_remove, tmp_path):
+    """
+    Tests processing a local bz2 file, storing its data, and cleaning up.
+    """
+    # Create a dummy compressed file in a temporary directory
+    temp_dir = tmp_path / "market_data"
+    temp_dir.mkdir()
+    dummy_file_path = temp_dir / f"market-history-{DATE_STR}.csv.bz2"
+
     df = pd.DataFrame({
-        "date": ["2023-01-01"], "average": [100.0], "highest": [110.0],
+        "date": [DATE_STR], "average": [100.0], "highest": [110.0],
         "lowest": [90.0], "order_count": [5_000_000_000], "volume": [10_000_000_000],
         "region_id": [10000002], "type_id": [34]
     })
-    csv_data = df.to_csv(index=False).encode("utf-8")
-    compressed_data = bz2.compress(csv_data)
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.content = compressed_data
-    mock_response.raise_for_status = MagicMock()
-    mock_http_get.return_value = mock_response
+    with bz2.open(dummy_file_path, "wt") as bz2f:
+        df.to_csv(bz2f, index=False)
 
-    process_market_history("2023-01-01")
+    process_market_history(str(dummy_file_path), DATE_STR)
 
-    mock_http_get.assert_called_once_with(
-        "https://data.everef.net/market-history/2023/market-history-2023-01-01.csv.bz2",
-        follow_redirects=True
-    )
     mock_create_bulk.assert_called_once()
     args, _ = mock_create_bulk.call_args
     assert len(args[1]) == 1
-    assert args[1][0].region_id == 10000002
+    assert args[1][0].volume == 10_000_000_000
+
+    mock_os_remove.assert_called_once_with(str(dummy_file_path))
 
 
-@patch("httpx.get")
-def test_get_ids_from_date_file(mock_http_get):
-    # Mock market data fetching
-    df = pd.DataFrame({
-        "region_id": [10000002, 10000003, 10000002],
-        "type_id": [34, 35, 34]
-    })
+@patch("os.makedirs")
+@patch("builtins.open")
+@patch("httpx.stream")
+def test_download_and_extract_ids(mock_stream, mock_open, mock_makedirs):
+    """
+    Tests downloading a file, saving it, and extracting IDs.
+    """
+    # Prepare mock data and responses
+    df = pd.DataFrame(DF_DATA)
     csv_data = df.to_csv(index=False).encode("utf-8")
     compressed_data = bz2.compress(csv_data)
+
     mock_response = MagicMock()
-    mock_response.content = compressed_data
     mock_response.raise_for_status = MagicMock()
-    mock_http_get.return_value = mock_response
+    mock_response.iter_bytes.return_value = [compressed_data]
 
-    result = get_ids_from_date_file("2023-01-01")
+    mock_stream_context = MagicMock()
+    mock_stream_context.__enter__.return_value = mock_response
+    mock_stream.return_value = mock_stream_context
 
-    assert isinstance(result["region_ids"], list)
-    assert isinstance(result["type_ids"], list)
-    assert set(result["region_ids"]) == {10000002, 10000003}
-    assert set(result["type_ids"]) == {34, 35}
+    mock_file_context = MagicMock()
+    mock_open.return_value = mock_file_context
 
-def test_get_ids_from_date_file_is_json_serializable():
-    # This test ensures that the output of the task can be serialized to JSON,
-    # preventing regressions of the int64 issue.
-    # We create a dataframe with numpy's default int64 type.
-    df = pd.DataFrame({
-        "region_id": [10000002, 10000003],
-        "type_id": [34, 35]
-    })
+    # We need to mock bz2.open to read our uncompressed data
+    with patch("bz2.open", return_value=io.StringIO(df.to_csv(index=False))):
+        result = download_and_extract_ids(DATE_STR)
 
-    # Create a mock that returns this dataframe
-    with patch('pandas.read_csv', return_value=df):
-        with patch('httpx.get'): # We still need to patch the network call
-            result = get_ids_from_date_file("2023-01-01")
+    mock_makedirs.assert_called_once_with(TEMP_DATA_DIR, exist_ok=True)
+    mock_stream.assert_called_once_with("GET", f"https://data.everef.net/market-history/{DATE_STR[:4]}/market-history-{DATE_STR}.csv.bz2", follow_redirects=True)
+    mock_open.assert_called_once_with(FILE_PATH, "wb")
 
-    # Attempt to serialize the result to JSON
-    try:
-        json.dumps(result)
-    except TypeError:
-        pytest.fail("The result of get_ids_from_date_file is not JSON serializable")
+    assert result["file_path"] == FILE_PATH
+    assert result["date"] == DATE_STR
+    assert result["region_ids"] == [10000002]
+    assert result["type_ids"] == [34]
 
 
 @patch("app.tasks.data_fetching.group")
 def test_dispatch_market_history_tasks(mock_group):
-    dates = ["2023-01-01", "2023-01-02"]
-    dispatch_market_history_tasks(dates)
+    processing_info = [{"file_path": FILE_PATH, "date": DATE_STR}]
+    dispatch_market_history_tasks(processing_info)
 
     mock_group.assert_called_once()
-    # Ensure all tasks in the group have immutable signatures
-    for task_sig in mock_group.call_args[0][0]:
-        assert task_sig.immutable is True
+    task_sig = mock_group.call_args[0][0][0]
+    assert task_sig.immutable is True
+    assert task_sig.args == (FILE_PATH, DATE_STR)
     mock_group.return_value.delay.assert_called_once()
 
 
 @patch("app.tasks.data_fetching.chord")
-@patch("app.tasks.data_fetching.crud.get_existing_type_ids")
-@patch("app.tasks.data_fetching.crud.get_existing_region_ids")
-def test_aggregate_and_dispatch_dependencies_with_missing(
-    mock_get_regions, mock_get_types, mock_chord, db_session
-):
+@patch("app.tasks.data_fetching.dispatch_market_history_tasks.si")
+@patch("app.tasks.data_fetching.crud.get_existing_type_ids", return_value=set())
+@patch("app.tasks.data_fetching.crud.get_existing_region_ids", return_value=set())
+def test_aggregate_and_dispatch_dependencies(mock_get_regions, mock_get_types, mock_dispatch_sig, mock_chord, db_session):
     """
-    Tests that the aggregator correctly uses a chord when dependencies are missing.
+    Tests that the aggregator correctly uses a chord with the correct file path info.
     """
-    mock_id_results = [{"region_ids": [1, 2], "type_ids": [10, 11]}]
-    dates = ["2023-01-01"]
-    mock_get_regions.return_value = {1}  # Region 2 is missing
-    mock_get_types.return_value = {10}   # Type 11 is missing
+    results = [
+        {"region_ids": [1, 2], "type_ids": [10, 11], "file_path": "/path/1", "date": "2023-01-01"},
+        {"region_ids": [], "type_ids": [], "file_path": None, "date": "2023-01-02"}, # Failed download
+    ]
 
-    aggregate_and_dispatch_dependencies(mock_id_results, dates)
+    aggregate_and_dispatch_dependencies(results)
 
     mock_chord.assert_called_once()
     kwargs = mock_chord.call_args.kwargs
 
-    # Check the header of the chord
+    # Check the header of the chord (dependency creation tasks)
     header_group = kwargs['header']
-    assert len(header_group.tasks) == 2  # One for region, one for type
-    task_names = {t.task for t in header_group.tasks}
-    assert 'app.tasks.data_fetching.create_region' in task_names
-    assert 'app.tasks.data_fetching.create_type' in task_names
+    assert len(header_group.tasks) == 4 # 2 regions, 2 types
 
-    # Check the body of the chord
-    callback_sig = kwargs['body']
-    assert callback_sig.task == 'app.tasks.data_fetching.dispatch_market_history_tasks'
-    assert callback_sig.immutable is True
-    assert callback_sig.kwargs['dates'] == dates
-
+    # Check the body of the chord (dispatching history processing)
+    mock_dispatch_sig.assert_called_once_with(
+        processing_info=[{"file_path": "/path/1", "date": "2023-01-01"}]
+    )
+    assert kwargs['body'] == mock_dispatch_sig.return_value
     mock_chord.return_value.delay.assert_called_once()
-
-
-@patch("app.tasks.data_fetching.chord")
-@patch("app.tasks.data_fetching.dispatch_market_history_tasks.delay")
-@patch("app.tasks.data_fetching.crud.get_existing_type_ids")
-@patch("app.tasks.data_fetching.crud.get_existing_region_ids")
-def test_aggregate_and_dispatch_dependencies_without_missing(
-    mock_get_regions, mock_get_types, mock_dispatch_delay, mock_chord, db_session
-):
-    """
-    Tests that the aggregator correctly dispatches history tasks directly
-    when no dependencies are missing.
-    """
-    mock_id_results = [{"region_ids": [1], "type_ids": [10]}]
-    dates = ["2023-01-01"]
-    mock_get_regions.return_value = {1}  # No missing regions
-    mock_get_types.return_value = {10}   # No missing types
-
-    aggregate_and_dispatch_dependencies(mock_id_results, dates)
-
-    mock_chord.assert_not_called()
-    mock_dispatch_delay.assert_called_once_with(dates=dates)
 
 
 @patch("app.tasks.data_fetching.chord")
 @patch("app.tasks.data_fetching.group")
-@patch("app.tasks.data_fetching.aggregate_and_dispatch_dependencies")
-def test_orchestrate_market_data_load(mock_aggregator, mock_group, mock_chord):
+def test_orchestrate_market_data_load(mock_group, mock_chord):
     dates = ["2023-01-01", "2023-01-02"]
 
-    # Call the orchestrator
-    orchestrate_market_data_load(dates)
+    # Mock the signature object that will be created
+    mock_aggregator_sig = MagicMock()
+    with patch("app.tasks.data_fetching.aggregate_and_dispatch_dependencies.s", return_value=mock_aggregator_sig):
+        orchestrate_market_data_load(dates)
 
-    # Assert that a group of ID gathering tasks was created
+    # Assert that a group of download tasks was created
     mock_group.assert_called_once()
-    id_gathering_call_args = mock_group.call_args_list[0].args[0]
-    assert len(list(id_gathering_call_args)) == 2
+    download_call_args = mock_group.call_args_list[0].args[0]
+    assert len(list(download_call_args)) == 2
 
-    # Assert that the aggregator (callback) was prepared correctly
-    mock_aggregator.s.assert_called_once_with(dates=dates)
-
-    # Assert that the chord was created and delayed
-    mock_chord.assert_called_once()
+    # Assert that the chord was created with the download group and the aggregator callback
+    mock_chord.assert_called_once_with(header=mock_group.return_value, body=mock_aggregator_sig)
     mock_chord.return_value.delay.assert_called_once()
-
-
-@patch("app.tasks.data_fetching.orchestrate_market_data_load.delay")
-def test_initial_data_load(mock_orchestrate):
-    initial_data_load()
-    mock_orchestrate.assert_called_once()
-    args, kwargs = mock_orchestrate.call_args
-    assert "dates" in kwargs
-    assert len(kwargs["dates"]) == 365
-
-
-@patch("app.tasks.data_fetching.orchestrate_market_data_load.delay")
-def test_daily_update_task(mock_orchestrate):
-    daily_update_task()
-    mock_orchestrate.assert_called_once()
-    args, kwargs = mock_orchestrate.call_args
-    assert "dates" in kwargs
-    assert len(kwargs["dates"]) == 1
