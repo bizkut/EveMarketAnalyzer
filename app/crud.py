@@ -34,7 +34,6 @@ def create_bulk_market_history(
     if not history_records:
         return
 
-    # Convert Pydantic schemas to dictionaries for bulk insert
     record_dicts = [record.model_dump() for record in history_records]
 
     try:
@@ -43,8 +42,6 @@ def create_bulk_market_history(
     except IntegrityError as e:
         logger.error(f"Integrity error during bulk insert: {e}")
         db.rollback()
-        # Handle potential duplicate entries if the task reruns, etc.
-        # This is a simple approach; a more robust solution might update existing records.
         logger.info("Attempting to insert records individually to bypass duplicates.")
         for record in record_dicts:
             db.query(models.MarketHistory).filter_by(**record).one_or_none() or db.add(models.MarketHistory(**record))
@@ -64,15 +61,23 @@ def get_region(db: Session, region_id: int) -> Optional[models.Region]:
 def get_or_create_region(db: Session, region: schemas.RegionCreate) -> models.Region:
     """
     Retrieves a region if it exists, or creates it if it does not.
+    This function is designed to be safe for concurrent execution.
     """
-    db_region = get_region(db, region.region_id)
+    db_region = db.query(models.Region).filter(models.Region.region_id == region.region_id).first()
     if db_region:
         return db_region
+
     db_region = models.Region(**region.model_dump())
     db.add(db_region)
-    db.commit()
-    db.refresh(db_region)
-    return db_region
+    try:
+        db.commit()
+        db.refresh(db_region)
+        return db_region
+    except IntegrityError:
+        # A concurrent transaction inserted the same region.
+        db.rollback()
+        # The region must exist now, so we can query for it.
+        return db.query(models.Region).filter(models.Region.region_id == region.region_id).first()
 
 def get_type(db: Session, type_id: int) -> Optional[models.EveType]:
     """
@@ -83,15 +88,21 @@ def get_type(db: Session, type_id: int) -> Optional[models.EveType]:
 def get_or_create_type(db: Session, eve_type: schemas.EveTypeCreate) -> models.EveType:
     """
     Retrieves an EVE type if it exists, or creates it if it does not.
+    This function is designed to be safe for concurrent execution.
     """
-    db_type = get_type(db, eve_type.type_id)
+    db_type = db.query(models.EveType).filter(models.EveType.type_id == eve_type.type_id).first()
     if db_type:
         return db_type
+
     db_type = models.EveType(**eve_type.model_dump())
     db.add(db_type)
-    db.commit()
-    db.refresh(db_type)
-    return db_type
+    try:
+        db.commit()
+        db.refresh(db_type)
+        return db_type
+    except IntegrityError:
+        db.rollback()
+        return db.query(models.EveType).filter(models.EveType.type_id == eve_type.type_id).first()
 
 def is_database_empty(db: Session) -> bool:
     """
