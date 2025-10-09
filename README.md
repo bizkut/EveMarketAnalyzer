@@ -73,8 +73,8 @@ This project is a FastAPI application that provides an API for analyzing EVE Onl
 
 ## API Endpoints
 
--   **`GET /api/markets/{region_id}/history?type_id={type_id}`**: Retrieves the market history for a specific item type within a given region.
--   **`POST /api/refresh`**: Triggers a full refresh of the market data, fetching the last year of history. This endpoint is protected and requires a valid API key sent in the `X-API-KEY` header.
+-   **`GET /markets/{region_id}/history?type_id={type_id}`**: Retrieves the market history for a specific item type within a given region.
+-   **`POST /refresh`**: Triggers a full refresh of the market data, fetching the last year of history. This endpoint is protected and requires a valid API key sent in the `X-API-KEY` header.
 
 ## Running Tests
 
