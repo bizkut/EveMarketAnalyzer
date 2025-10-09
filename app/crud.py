@@ -1,5 +1,5 @@
 import logging
-from typing import List, Set
+from typing import List, Set, Optional
 
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -35,7 +35,7 @@ def create_bulk_market_history(
         return
 
     # Convert Pydantic schemas to dictionaries for bulk insert
-    record_dicts = [record.dict() for record in history_records]
+    record_dicts = [record.model_dump() for record in history_records]
 
     try:
         db.bulk_insert_mappings(models.MarketHistory, record_dicts)
@@ -55,7 +55,7 @@ def create_bulk_market_history(
         db.rollback()
         raise
 
-def get_region(db: Session, region_id: int) -> models.Region | None:
+def get_region(db: Session, region_id: int) -> Optional[models.Region]:
     """
     Retrieves a single region by its ID.
     """
@@ -68,13 +68,13 @@ def get_or_create_region(db: Session, region: schemas.RegionCreate) -> models.Re
     db_region = get_region(db, region.region_id)
     if db_region:
         return db_region
-    db_region = models.Region(**region.dict())
+    db_region = models.Region(**region.model_dump())
     db.add(db_region)
     db.commit()
     db.refresh(db_region)
     return db_region
 
-def get_type(db: Session, type_id: int) -> models.EveType | None:
+def get_type(db: Session, type_id: int) -> Optional[models.EveType]:
     """
     Retrieves a single EVE type by its ID.
     """
@@ -87,7 +87,7 @@ def get_or_create_type(db: Session, eve_type: schemas.EveTypeCreate) -> models.E
     db_type = get_type(db, eve_type.type_id)
     if db_type:
         return db_type
-    db_type = models.EveType(**eve_type.dict())
+    db_type = models.EveType(**eve_type.model_dump())
     db.add(db_type)
     db.commit()
     db.refresh(db_type)
