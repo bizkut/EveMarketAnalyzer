@@ -187,3 +187,10 @@ def get_market_analysis(
         query = query.order_by(models.MarketAnalysis.demand.desc())
 
     return query.limit(limit).all()
+
+
+def is_analysis_table_empty(db: Session) -> bool:
+    """
+    Checks if the market_analysis table has any records.
+    """
+    return db.query(models.MarketAnalysis).first() is None
