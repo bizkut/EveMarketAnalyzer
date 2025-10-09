@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Date, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, Date, Text, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -34,6 +34,16 @@ class EveType(Base):
     name = Column(String, index=True)
     description = Column(Text)
     icon_url = Column(String)
+    capacity = Column(Float, nullable=True)
+    group_id = Column(Integer, nullable=True)
+    market_group_id = Column(Integer, nullable=True)
+    mass = Column(Float, nullable=True)
+    packaged_volume = Column(Float, nullable=True)
+    portion_size = Column(Integer, nullable=True)
+    published = Column(Boolean)
+    radius = Column(Float, nullable=True)
+    volume = Column(Float, nullable=True)
+
 
     history = relationship("MarketHistory", back_populates="eve_type")
     dogma_attributes = relationship(

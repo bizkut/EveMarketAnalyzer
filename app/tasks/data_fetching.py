@@ -111,6 +111,15 @@ def fetch_and_store_market_history(self, date_str: str):
                             name=data.get("name"),
                             description=data.get("description", ""),
                             icon_url=icon_url,
+                            capacity=data.get("capacity"),
+                            group_id=data.get("group_id"),
+                            market_group_id=data.get("market_group_id"),
+                            mass=data.get("mass"),
+                            packaged_volume=data.get("packaged_volume"),
+                            portion_size=data.get("portion_size"),
+                            published=data.get("published", False),
+                            radius=data.get("radius"),
+                            volume=data.get("volume"),
                             dogma_attributes=dogma_attributes,
                         )
                         crud.get_or_create_type(db, type_create)

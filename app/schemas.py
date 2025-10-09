@@ -57,6 +57,15 @@ class EveTypeBase(BaseModel):
     name: str
     description: Optional[str] = None
     icon_url: Optional[str] = None
+    capacity: Optional[float] = None
+    group_id: Optional[int] = None
+    market_group_id: Optional[int] = None
+    mass: Optional[float] = None
+    packaged_volume: Optional[float] = None
+    portion_size: Optional[int] = None
+    published: bool = False
+    radius: Optional[float] = None
+    volume: Optional[float] = None
 
 class EveTypeCreate(EveTypeBase):
     dogma_attributes: List[TypeDogmaAttributeCreate] = []
