@@ -127,12 +127,15 @@ def test_get_ids_from_date_file_is_json_serializable():
 
 
 @patch("app.tasks.data_fetching.chain")
-@patch("app.tasks.data_fetching.group")
 @patch("app.tasks.data_fetching.crud.get_existing_type_ids")
 @patch("app.tasks.data_fetching.crud.get_existing_region_ids")
 def test_aggregate_and_dispatch_dependencies(
-    mock_get_regions, mock_get_types, mock_group, mock_chain, db_session
+    mock_get_regions, mock_get_types, mock_chain, db_session
 ):
+    """
+    Tests that the aggregator task correctly identifies missing dependencies
+    and constructs a chain of groups with immutable signatures.
+    """
     # Input to the aggregator task
     mock_id_results = [
         {"region_ids": [10000002, 10000003], "type_ids": [34, 35]},
@@ -151,22 +154,31 @@ def test_aggregate_and_dispatch_dependencies(
     mock_get_regions.assert_called_once()
     mock_get_types.assert_called_once()
 
-    # Check that groups were created for the *missing* items
-    assert mock_group.call_count == 3
-
-    # Region call
-    region_creation_group_call_args = mock_group.call_args_list[0].args[0]
-    assert set(s.args[0] for s in region_creation_group_call_args) == {10000003, 10000004}
-
-    # Type call
-    type_creation_group_call_args = mock_group.call_args_list[1].args[0]
-    assert set(s.args[0] for s in type_creation_group_call_args) == {35, 36}
-
-    # History call
-    history_processing_group_call_args = mock_group.call_args_list[2].args[0]
-    assert set(s.args[0] for s in history_processing_group_call_args) == set(dates)
-
+    # Check that chain was called and inspect its arguments
     mock_chain.assert_called_once()
+    args, _ = mock_chain.call_args
+
+    # The chain should contain 3 groups of tasks
+    assert len(args) == 3
+    region_group, type_group, history_group = args
+
+    # Verify the contents and immutability of each group
+    assert len(region_group.tasks) == 2
+    for task_sig in region_group.tasks:
+        assert task_sig.immutable is True
+    assert {s.args[0] for s in region_group.tasks} == {10000003, 10000004}
+
+    assert len(type_group.tasks) == 2
+    for task_sig in type_group.tasks:
+        assert task_sig.immutable is True
+    assert {s.args[0] for s in type_group.tasks} == {35, 36}
+
+    assert len(history_group.tasks) == 2
+    for task_sig in history_group.tasks:
+        assert task_sig.immutable is True
+    assert {s.args[0] for s in history_group.tasks} == set(dates)
+
+    # Check that delay was called on the chain
     mock_chain.return_value.delay.assert_called_once()
 
 

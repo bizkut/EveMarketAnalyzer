@@ -175,10 +175,10 @@ def aggregate_and_dispatch_dependencies(id_results: list, dates: list[str]):
         missing_type_ids = all_type_ids - existing_type_ids
         logger.info(f"Found {len(missing_type_ids)} new types to create.")
 
-        # Define task groups
-        region_creation_tasks = group(create_region.s(rid) for rid in sorted(list(missing_region_ids)))
-        type_creation_tasks = group(create_type.s(tid) for tid in sorted(list(missing_type_ids)))
-        market_history_tasks = group(process_market_history.s(date) for date in dates)
+        # Define task groups with immutable signatures to prevent unintended result passing
+        region_creation_tasks = group(create_region.si(rid) for rid in sorted(list(missing_region_ids)))
+        type_creation_tasks = group(create_type.si(tid) for tid in sorted(list(missing_type_ids)))
+        market_history_tasks = group(process_market_history.si(date) for date in dates)
 
         # Create a chain of tasks: create dependencies first, then process history
         workflow = chain(
