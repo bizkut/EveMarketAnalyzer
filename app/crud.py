@@ -174,16 +174,31 @@ def create_or_update_market_analysis(
 
 
 def get_market_analysis(
-    db: Session, sort_by: str, limit: int = 100
+    db: Session,
+    sort: str,
+    limit: int = 100,
+    type_id: Optional[int] = None,
+    type_name: Optional[str] = None,
+    region_id: Optional[int] = None,
+    region_name: Optional[str] = None,
 ) -> List[models.MarketAnalysis]:
     """
-    Retrieves pre-calculated market analysis data, sorted and limited.
+    Retrieves pre-calculated market analysis data, sorted, limited, and filtered.
     """
     query = db.query(models.MarketAnalysis).join(models.EveType).join(models.Region)
 
-    if sort_by == "profit_margin":
+    if type_id is not None:
+        query = query.filter(models.MarketAnalysis.type_id == type_id)
+    if type_name is not None:
+        query = query.filter(models.EveType.name.ilike(f"%{type_name}%"))
+    if region_id is not None:
+        query = query.filter(models.MarketAnalysis.region_id == region_id)
+    if region_name is not None:
+        query = query.filter(models.Region.name.ilike(f"%{region_name}%"))
+
+    if sort == "profit_margin":
         query = query.order_by(models.MarketAnalysis.profit_margin.desc())
-    else:  # sort_by == "demand"
+    else:  # sort == "demand"
         query = query.order_by(models.MarketAnalysis.demand.desc())
 
     return query.limit(limit).all()

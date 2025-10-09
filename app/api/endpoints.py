@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Security, status
 from fastapi.security import APIKeyHeader
@@ -81,16 +81,33 @@ async def refresh_daily_market_data():
     summary="Get pre-calculated market analysis",
 )
 def get_market_analysis(
-    sort_by: str = Query(
+    sort: str = Query(
         "profit_margin",
         description="Sort by 'profit_margin' or 'demand'",
         pattern="^(profit_margin|demand)$",
+    ),
+    type_id: Optional[int] = Query(None, description="Filter by type ID"),
+    type_name: Optional[str] = Query(
+        None, description="Filter by type name (case-insensitive, partial match)"
+    ),
+    region_id: Optional[int] = Query(None, description="Filter by region ID"),
+    region_name: Optional[str] = Query(
+        None, description="Filter by region name (case-insensitive, partial match)"
     ),
     db: Session = Depends(get_db),
 ):
     """
     Retrieves the pre-calculated market analysis, which is updated daily.
-    The results can be sorted by either profit margin or demand in descending order.
+    The results can be sorted by either profit margin or demand in descending order,
+    and can be filtered by type and region attributes.
     """
-    analysis_results = crud.get_market_analysis(db, sort_by=sort_by, limit=100)
+    analysis_results = crud.get_market_analysis(
+        db,
+        sort=sort,
+        limit=100,
+        type_id=type_id,
+        type_name=type_name,
+        region_id=region_id,
+        region_name=region_name,
+    )
     return schemas.MarketAnalysisResult(results=analysis_results)

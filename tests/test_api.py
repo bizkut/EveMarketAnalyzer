@@ -114,28 +114,58 @@ def test_get_market_analysis(client: TestClient, db_session: Session):
     crud.create_or_update_market_analysis(db_session, analysis_data)
 
     # Test sorting by profit_margin
-    response = client.get("/analysis?sort_by=profit_margin")
+    response = client.get("/analysis?sort=profit_margin")
     assert response.status_code == 200
     data = response.json()["results"]
     assert len(data) == 3
-    assert data[0]["type_name"] == "Tritanium"
-    assert data[0]["region_name"] == "The Forge"
     assert data[0]["profit_margin"] == 100.0
-    assert data[1]["type_name"] == "Tritanium"
-    assert data[1]["region_name"] == "Domain"
-    assert data[2]["type_name"] == "Pyerite"
+    assert data[1]["profit_margin"] == 50.0
+    assert data[2]["profit_margin"] == 10.0
 
     # Test sorting by demand
-    response = client.get("/analysis?sort_by=demand")
+    response = client.get("/analysis?sort=demand")
     assert response.status_code == 200
     data = response.json()["results"]
     assert len(data) == 3
-    assert data[0]["type_name"] == "Pyerite"
-    assert data[0]["region_name"] == "The Forge"
     assert data[0]["demand"] == 1100.0
-    assert data[1]["type_name"] == "Tritanium"
-    assert data[1]["region_name"] == "Domain"
-    assert data[2]["type_name"] == "Tritanium"
+    assert data[1]["demand"] == 500.0
+    assert data[2]["demand"] == 110.0
+
+    # Test filtering by region_id
+    response = client.get(f"/analysis?region_id={region1.region_id}")
+    assert response.status_code == 200
+    data = response.json()["results"]
+    assert len(data) == 2
+    assert all(d["region_id"] == region1.region_id for d in data)
+
+    # Test filtering by type_name
+    response = client.get("/analysis?type_name=Tritanium")
+    assert response.status_code == 200
+    data = response.json()["results"]
+    assert len(data) == 2
+    assert all(d["type_name"] == "Tritanium" for d in data)
+
+    # Test filtering by region_name
+    response = client.get("/analysis?region_name=Forge")
+    assert response.status_code == 200
+    data = response.json()["results"]
+    assert len(data) == 2
+    assert all("Forge" in d["region_name"] for d in data)
+
+    # Test filtering by type_id
+    response = client.get(f"/analysis?type_id={type2.type_id}")
+    assert response.status_code == 200
+    data = response.json()["results"]
+    assert len(data) == 1
+    assert data[0]["type_id"] == type2.type_id
+
+    # Test combined filtering
+    response = client.get(f"/analysis?type_id={type1.type_id}&region_id={region1.region_id}")
+    assert response.status_code == 200
+    data = response.json()["results"]
+    assert len(data) == 1
+    assert data[0]["type_id"] == type1.type_id
+    assert data[0]["region_id"] == region1.region_id
 
 
 def test_get_market_analysis_no_data(client: TestClient, db_session: Session):
