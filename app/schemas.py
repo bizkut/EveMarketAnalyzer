@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from datetime import date
 from typing import Optional
 
@@ -24,8 +24,7 @@ class MarketHistory(BaseModel):
     order_count: int
     volume: int
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Region Schemas
 class RegionBase(BaseModel):
@@ -37,8 +36,7 @@ class RegionCreate(RegionBase):
     pass
 
 class Region(RegionBase):
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 # EveType Schemas
 class EveTypeBase(BaseModel):
@@ -51,5 +49,4 @@ class EveTypeCreate(EveTypeBase):
     pass
 
 class EveType(EveTypeBase):
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
