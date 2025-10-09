@@ -46,11 +46,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data/
     environment:
-      - POSTGRES_USER=user
+      - POSTGRES_USER=eveuser
       - POSTGRES_PASSWORD=password
       - POSTGRES_DB=evemarket
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user -d evemarket"]
+      test: ["CMD-SHELL", "pg_isready -U eveuser -d evemarket"]
       interval: 5s
       timeout: 5s
       retries: 5
