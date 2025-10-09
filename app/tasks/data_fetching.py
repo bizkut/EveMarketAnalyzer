@@ -97,7 +97,7 @@ def fetch_and_store_market_history(self, date_str: str):
                         type_url = f"{ESI_API_BASE_URL}/universe/types/{type_id}/"
                         logger.info(f"Fetching type info for {type_id}")
                         data = _fetch_esi_url(type_url)
-                        icon_url = f"https://images.evetech.net/types/{type_id}/icon"
+                        icon_url = f"https://images.evetech.net/types/{type_id}/icon?size=64"
 
                         dogma_attributes = [
                             schemas.TypeDogmaAttributeCreate(
