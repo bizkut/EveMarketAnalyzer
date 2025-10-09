@@ -15,6 +15,7 @@ from app.tasks.data_fetching import (
     orchestrate_market_data_load,
     initial_data_load,
     daily_update_task,
+    get_ids_from_date_file,
 )
 
 
@@ -80,18 +81,12 @@ def test_process_market_history(mock_http_get, mock_create_bulk, db_session):
     assert args[1][0].region_id == 10000002
 
 
-@patch("app.tasks.data_fetching.chain")
-@patch("app.tasks.data_fetching.group")
-@patch("app.tasks.data_fetching.crud.get_existing_type_ids")
-@patch("app.tasks.data_fetching.crud.get_existing_region_ids")
 @patch("httpx.get")
-def test_orchestrate_market_data_load(
-    mock_http_get, mock_get_regions, mock_get_types, mock_group, mock_chain, db_session
-):
+def test_get_ids_from_date_file(mock_http_get):
     # Mock market data fetching
     df = pd.DataFrame({
-        "region_id": [10000002, 10000003],
-        "type_id": [34, 35]
+        "region_id": [10000002, 10000003, 10000002],
+        "type_id": [34, 35, 34]
     })
     csv_data = df.to_csv(index=False).encode("utf-8")
     compressed_data = bz2.compress(csv_data)
@@ -100,38 +95,68 @@ def test_orchestrate_market_data_load(
     mock_response.raise_for_status = MagicMock()
     mock_http_get.return_value = mock_response
 
-    # Mock DB lookups
-    mock_get_regions.return_value = {10000002}  # Region 10000003 is missing
-    mock_get_types.return_value = set()       # Both types are missing
+    result = get_ids_from_date_file("2023-01-01")
 
-    # Mock Celery group return value
-    mock_group.return_value = MagicMock()
+    assert result["region_ids"] == {10000002, 10000003}
+    assert result["type_ids"] == {34, 35}
+
+
+@patch("app.tasks.data_fetching.chain")
+@patch("app.tasks.data_fetching.group")
+@patch("app.tasks.data_fetching.crud.get_existing_type_ids")
+@patch("app.tasks.data_fetching.crud.get_existing_region_ids")
+def test_orchestrate_market_data_load(
+    mock_get_regions, mock_get_types, mock_group, mock_chain, db_session
+):
+    # Mock the result of the ID gathering tasks
+    mock_id_results = [
+        {"region_ids": {10000002, 10000003}, "type_ids": {34, 35}},
+        {"region_ids": {10000002, 10000004}, "type_ids": {34, 36}},
+    ]
+
+    # Mock the group and chain machinery
+    mock_async_result = MagicMock()
+    mock_async_result.get.return_value = mock_id_results
+
+    mock_id_gathering_group = MagicMock()
+    mock_id_gathering_group.apply_async.return_value = mock_async_result
+
+    # The group() call will be used for 3 things: id gathering, region creation, type creation, history processing
+    # We want to intercept the first call and return our special mock.
+    mock_group.side_effect = [
+        mock_id_gathering_group, # First call is for ID gathering
+        MagicMock(),             # Second is for region creation
+        MagicMock(),             # Third is for type creation
+        MagicMock()              # Fourth is for history processing
+    ]
+
+    # Mock DB lookups
+    mock_get_regions.return_value = {10000002}  # 10000003 and 10000004 are missing
+    mock_get_types.return_value = {34}          # 35 and 36 are missing
 
     # Call the orchestrator
-    orchestrate_market_data_load(["2023-01-01"])
+    orchestrate_market_data_load(["2023-01-01", "2023-01-02"])
 
     # Assertions
-    mock_http_get.assert_called_once()
     mock_get_regions.assert_called_once()
     mock_get_types.assert_called_once()
 
+    # Check that the ID gathering group was called correctly
+    id_gathering_call_args = mock_group.call_args_list[0].args[0]
+    assert len(list(id_gathering_call_args)) == 2 # Called for 2 dates
+
     # Check that groups were created for the *missing* items
-    # group(create_region.s(rid) for rid in sorted(list(missing_region_ids)))
-    # group(create_type.s(tid) for tid in sorted(list(missing_type_ids)))
-    # group(process_market_history.s(date) for date in dates)
-    assert mock_group.call_count == 3
+    # Region call is the second time mock_group is called
+    region_creation_group_call_args = mock_group.call_args_list[1].args[0]
+    assert len(list(region_creation_group_call_args)) == 2 # 2 missing regions
 
-    # Region call
-    region_call_args = mock_group.call_args_list[0].args[0]
-    assert len(list(region_call_args)) == 1 # Only one missing region
+    # Type call is the third time
+    type_creation_group_call_args = mock_group.call_args_list[2].args[0]
+    assert len(list(type_creation_group_call_args)) == 2 # 2 missing types
 
-    # Type call
-    type_call_args = mock_group.call_args_list[1].args[0]
-    assert len(list(type_call_args)) == 2 # Two missing types
-
-    # History call
-    history_call_args = mock_group.call_args_list[2].args[0]
-    assert len(list(history_call_args)) == 1 # One date
+    # History call is the fourth time
+    history_processing_group_call_args = mock_group.call_args_list[3].args[0]
+    assert len(list(history_processing_group_call_args)) == 2 # 2 dates
 
     mock_chain.assert_called_once()
     mock_chain.return_value.delay.assert_called_once()

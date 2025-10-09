@@ -126,35 +126,52 @@ def process_market_history(self, date_str: str):
 
 
 @shared_task
+def get_ids_from_date_file(date_str: str) -> dict:
+    """
+    Downloads a market history file for a given date, extracts unique
+    region and type IDs, and returns them as sets.
+    """
+    try:
+        url = f"{EVEREF_DATA_URL}/{date_str[:4]}/market-history-{date_str}.csv.bz2"
+        logger.info(f"Gathering IDs from {url}")
+        response = httpx.get(url, follow_redirects=True)
+        response.raise_for_status()
+        decompressed_data = bz2.decompress(response.content)
+        df = pd.read_csv(io.BytesIO(decompressed_data), usecols=["region_id", "type_id"])
+        region_ids = set(df["region_id"].unique())
+        type_ids = set(df["type_id"].unique())
+        return {"region_ids": region_ids, "type_ids": type_ids}
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            logger.warning(f"Market history not found for {date_str}. Skipping.")
+            return {"region_ids": set(), "type_ids": set()}
+        raise e
+    except Exception as e:
+        logger.error(f"Failed to process file for {date_str}: {e}")
+        return {"region_ids": set(), "type_ids": set()}
+
+
+@shared_task
 def orchestrate_market_data_load(dates: list[str]):
     """
     Orchestrates the entire data loading process:
-    1. Gathers all required region and type IDs.
+    1. Gathers all required region and type IDs in parallel.
     2. Creates missing regions and types in parallel.
     3. Processes market history files in parallel after dependencies are met.
     """
     db: Session = SessionLocal()
     try:
+        # Step 1: Gather all IDs in parallel
+        id_gathering_tasks = group(get_ids_from_date_file.s(date) for date in dates)
+        id_results = id_gathering_tasks.apply_async().get()
+
         all_region_ids = set()
         all_type_ids = set()
+        for result in id_results:
+            all_region_ids.update(result.get("region_ids", set()))
+            all_type_ids.update(result.get("type_ids", set()))
 
-        for date_str in dates:
-            try:
-                url = f"{EVEREF_DATA_URL}/{date_str[:4]}/market-history-{date_str}.csv.bz2"
-                logger.info(f"Gathering IDs from {url}")
-                response = httpx.get(url, follow_redirects=True)
-                response.raise_for_status()
-                decompressed_data = bz2.decompress(response.content)
-                df = pd.read_csv(io.BytesIO(decompressed_data), usecols=["region_id", "type_id"])
-                all_region_ids.update(df["region_id"].unique())
-                all_type_ids.update(df["type_id"].unique())
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 404:
-                    logger.warning(f"Market history not found for {date_str}. Skipping.")
-                    continue
-                raise e
-
-        # Determine missing regions and types
+        # Step 2: Determine missing regions and types
         existing_region_ids = crud.get_existing_region_ids(db, list(all_region_ids))
         missing_region_ids = all_region_ids - existing_region_ids
         logger.info(f"Found {len(missing_region_ids)} new regions to create.")
